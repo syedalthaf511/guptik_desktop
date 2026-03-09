@@ -21,8 +21,8 @@ class DockerService {
       '$_vaultPath/data/ollama',
       '$_vaultPath/data/n8n',
       '$_vaultPath/data/osint',
-      '$_vaultPath/vault_files', 
-      '$_vaultPath/gateway'
+      '$_vaultPath/vault_files',
+      '$_vaultPath/gateway',
     ];
 
     for (var path in requiredDirs) {
@@ -79,7 +79,7 @@ services:
       - "\${POSTGRES_PORT}:5432"
     environment:
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: \${POSTGRES_PASSWORD}
+      POSTGRES_PASSWORD: GuptikSystemPassword2026
       POSTGRES_DB: postgres
     volumes:
       - ./data/postgres:/var/lib/postgresql/data
@@ -122,7 +122,7 @@ services:
     await pubspec.writeAsString('''
 name: guptik_gateway
 environment: {sdk: '>=3.0.0 <4.0.0'}
-dependencies: {shelf: ^1.4.0, shelf_router: ^1.1.0, http: ^1.1.0, mime: ^1.0.4}
+dependencies: {shelf: ^1.4.0, shelf_router: ^1.1.0, http: ^1.1.0, mime: ^1.0.4,postgres: ^3.4.0}
 ''');
 
     // 2. server.dart (BULLETPROOF VERSION)
@@ -135,6 +135,7 @@ import 'package:shelf/shelf_io.dart';
 import 'package:shelf_router/shelf_router.dart';
 import 'package:http/http.dart' as http;
 import 'package:mime/mime.dart';
+import 'package:postgres/postgres.dart';
 
 void main() async {
   final router = Router();
@@ -163,16 +164,56 @@ void main() async {
       await sink.close();
       
       final size = await file.length();
+      final mimeType = lookupMimeType(file.path) ?? 'application/octet-stream';
       print('Upload complete. Size: $size bytes');
-      
-      return Response.ok(jsonEncode({'status': 'saved', 'path': filename, 'size': size}));
+
+      // --- NEW DATABASE SYNC LOGIC ---
+      try {
+        print('Connecting to Postgres database...');
+        final connection = await Connection.open(
+          Endpoint(
+            host:
+                'db', // Matches the name of your Postgres container in docker-compose!
+            port: 5432,
+            database: 'postgres',
+            username: 'postgres',
+            password: 'GuptikSystemPassword2026',
+          ),
+          settings: const ConnectionSettings(sslMode: SslMode.disable),
+        );
+
+        print('Inserting file metadata into vault_files table...');
+        await connection.execute(
+          Sql.named(
+            'INSERT INTO vault_files (file_name, file_path, file_size, mime_type) VALUES (@fn, @fp, @fs, @mt)',
+          ),
+          parameters: {
+            'fn': filename,
+            'fp': file.path,
+            'fs': size,
+            'mt': mimeType,
+          },
+        );
+
+        await connection.close();
+        print('Database insert successful!');
+      } catch (dbError) {
+        print('DATABASE ERROR: $dbError');
+      }
+      // -------------------------------
+
+      return Response.ok(
+        jsonEncode({'status': 'saved', 'path': filename, 'size': size}),
+      );
     } catch (e, stack) {
       print('UPLOAD FAILED: $e');
       print(stack);
-      
+
       // Attempt to close sink if open
-      try { await sink?.close(); } catch (_) {}
-      
+      try {
+        await sink?.close();
+      } catch (_) {}
+
       // Return plain text error so it shows in curl
       return Response.internalServerError(body: 'UPLOAD ERROR: $e');
     }
@@ -191,14 +232,23 @@ void main() async {
     try {
       final dir = Directory('/app/storage');
       if (!dir.existsSync()) return Response.ok('[]');
-      
-      final files = dir.listSync().whereType<File>().map((f) => {
-        'name': f.uri.pathSegments.last,
-        'size': f.lengthSync(),
-        'modified': f.lastModifiedSync().toIso8601String()
-      }).toList();
-      
-      return Response.ok(jsonEncode(files), headers: {'Content-Type': 'application/json'});
+
+      final files = dir
+          .listSync()
+          .whereType<File>()
+          .map(
+            (f) => {
+              'name': f.uri.pathSegments.last,
+              'size': f.lengthSync(),
+              'modified': f.lastModifiedSync().toIso8601String(),
+            },
+          )
+          .toList();
+
+      return Response.ok(
+        jsonEncode(files),
+        headers: {'Content-Type': 'application/json'},
+      );
     } catch (e) {
       return Response.internalServerError(body: 'List Error: $e');
     }
@@ -249,22 +299,68 @@ void main() async {
   final handler = Pipeline().addMiddleware(logRequests()).addHandler(router.call);
   final server = await serve(handler, InternetAddress.anyIPv4, 8080);
   print('Gateway listening on port ${server.port}');
+
+  // 6. DELETE FILE (Removes physical file AND database row)
+  router.delete('/vault/delete/<filename>', (
+    Request req,
+    String filename,
+  ) async {
+    try {
+      print('Attempting to fully delete: $filename');
+
+      // 1. Delete the physical file from the hard drive
+      final file = File('/app/storage/$filename');
+      if (await file.exists()) {
+        await file.delete();
+        print('Physical file deleted from storage.');
+      } else {
+        print(
+          'Physical file not found, but continuing to database cleanup.',
+        );
+      }
+
+      // 2. Delete the record from the Postgres database
+      final connection = await Connection.open(
+        Endpoint(
+          host: 'db',
+          port: 5432,
+          database: 'postgres',
+          username: 'postgres',
+          password: 'GuptikSystemPassword2026',
+        ),
+        settings: const ConnectionSettings(sslMode: SslMode.disable),
+      );
+
+      await connection.execute(
+        Sql.named('DELETE FROM vault_files WHERE file_name = @fn'),
+        parameters: {'fn': filename},
+      );
+
+      await connection.close();
+      print('Database record deleted.');
+
+      return Response.ok(jsonEncode({'status': 'deleted', 'file': filename}));
+    } catch (e) {
+      print('DELETE ERROR: $e');
+      return Response.internalServerError(body: 'Delete Error: $e');
+    }
+  });
 }
 ''');
   }
 
-
   Future<void> stopStack() async {
     try {
-      if (_vaultPath == null) throw Exception("Vault path not set"); // <--- Added underscore
-      
+      if (_vaultPath == null)
+        throw Exception("Vault path not set"); // <--- Added underscore
+
       // Run docker-compose down
       final result = await Process.run(
         'docker-compose',
         ['-f', 'docker-compose.yml', 'down'],
         workingDirectory: _vaultPath, // <--- Added underscore
       );
-      
+
       if (result.exitCode != 0) {
         print("Error stopping Docker: ${result.stderr}");
       } else {
@@ -277,17 +373,18 @@ void main() async {
 
   Future<void> startStack() async {
     if (_vaultPath == null) throw Exception("Vault path not set");
-    
+
     final shell = Shell(
-      workingDirectory: _vaultPath, 
+      workingDirectory: _vaultPath,
       environment: Platform.environment,
-      throwOnError: false
+      throwOnError: false,
     );
-    
+
     String dockerCmd = 'docker';
     if (Platform.isLinux || Platform.isMacOS) {
       final which = await shell.run('which docker');
-      if (which.first.exitCode == 0) dockerCmd = which.first.stdout.toString().trim();
+      if (which.first.exitCode == 0)
+        dockerCmd = which.first.stdout.toString().trim();
     }
 
     await shell.run('$dockerCmd compose pull');

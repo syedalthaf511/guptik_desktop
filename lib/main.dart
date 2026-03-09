@@ -8,7 +8,7 @@ import 'screens/auth/boot_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  
+
   // 1. Initialize Window Manager (for Desktop)
   await windowManager.ensureInitialized();
   WindowOptions windowOptions = const WindowOptions(
@@ -18,7 +18,7 @@ void main() async {
     skipTaskbar: false,
     titleBarStyle: TitleBarStyle.hidden,
   );
-  
+
   windowManager.waitUntilReadyToShow(windowOptions, () async {
     await windowManager.show();
     await windowManager.focus();
@@ -28,14 +28,17 @@ void main() async {
   // This must happen before any screen tries to access the database.
   await Supabase.initialize(
     url: 'https://base.myqrmart.com',
-    anonKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlLWJhc2UifQ.QL7hHqH2Ko_LNAuS--BgqHrDLFCCl3j0uQPB-FjoC4w',
+    anonKey:
+        'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlLWJhc2UifQ.QL7hHqH2Ko_LNAuS--BgqHrDLFCCl3j0uQPB-FjoC4w',
   );
 
   // 3. Check Login State
   final prefs = await SharedPreferences.getInstance();
   final bool loggedIn = prefs.getBool('is_logged_in') ?? false;
 
-  runApp(MyApp(startScreen: loggedIn ? const BootScreen() : const LoginScreen()));
+  runApp(
+    MyApp(startScreen: loggedIn ? const BootScreen() : const LoginScreen()),
+  );
 }
 
 class MyApp extends StatelessWidget {
@@ -46,12 +49,14 @@ class MyApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
+
       title: 'Guptik Desktop',
       theme: ThemeData(
         brightness: Brightness.dark,
         scaffoldBackgroundColor: const Color(0xFF0F172A),
-        textTheme: GoogleFonts.jetBrainsMonoTextTheme(Theme.of(context).textTheme)
-            .apply(bodyColor: Colors.white, displayColor: Colors.white),
+        textTheme: GoogleFonts.jetBrainsMonoTextTheme(
+          Theme.of(context).textTheme,
+        ).apply(bodyColor: Colors.white, displayColor: Colors.white),
         useMaterial3: true,
       ),
       home: startScreen,
@@ -59,4 +64,4 @@ class MyApp extends StatelessWidget {
   }
 }
 
-// last updated on 03032026 
+// last updated on 03032026

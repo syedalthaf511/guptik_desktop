@@ -10,7 +10,6 @@ import '../../widgets/window_header.dart';
 import '../datatables/datatables_screen.dart';
 import '../facebook/meta_dashboard.dart';
 import '../security/security_screen.dart';
-import '../security/security_screen.dart';
 import '../guptik/automation_screen.dart';
 
 class DashboardScreen extends StatefulWidget {
@@ -32,7 +31,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     TrustMeScreen(),
     GuptikScreen(),
     AutomationScreen(),
-    SecurityScreen(), 
+    SecurityScreen(),
     DatatablesScreen(),
     SettingsScreen(),
   ];
@@ -77,7 +76,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
             width: 250,
             decoration: BoxDecoration(
               color: const Color(0xFF1E293B),
-              border: Border(right: BorderSide(color: Colors.white.withOpacity(0.1))),
+              border: Border(
+                right: BorderSide(color: Colors.white.withOpacity(0.1)),
+              ),
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -96,17 +97,25 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   ),
                 ),
                 const SizedBox(height: 40),
-                ...List.generate(
-                  _screenIcons.length,
-                  (index) => _buildNavItem(index, _screenLabels[index], _screenIcons[index]),
+
+                // FIXED: Wrapped the menu items in an Expanded + ScrollView
+                Expanded(
+                  child: SingleChildScrollView(
+                    child: Column(
+                      children: List.generate(
+                        _screenIcons.length,
+                        (index) => _buildNavItem(
+                          index,
+                          _screenLabels[index],
+                          _screenIcons[index],
+                        ),
+                      ),
+                    ),
+                  ),
                 ),
-                const Spacer(),
+
                 // Settings at bottom (Routes to Index 9)
-                _buildNavItem(
-                  9,
-                  "Settings",
-                  LucideIcons.settings,
-                ),
+                _buildNavItem(9, "Settings", LucideIcons.settings),
                 const SizedBox(height: 20),
               ],
             ),
@@ -141,13 +150,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
             fontSize: 14,
           ),
         ),
-        tileColor: isSelected ? Colors.white.withOpacity(0.05) : Colors.transparent,
+        tileColor: isSelected
+            ? Colors.white.withOpacity(0.05)
+            : Colors.transparent,
         onTap: () {
           setState(() => _selectedIndex = index);
         },
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(8),
-        ),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
       ),
     );
   }
