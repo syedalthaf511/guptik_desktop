@@ -38,30 +38,53 @@ class _VaultScreenState extends State<VaultScreen> {
     String? storedPath = prefs.getString('vault_path');
     String? storedUrl = await _storage.getPublicUrl();
     String? deviceId = await _storage.getDeviceId();
+    final userId = _supabase.currentUserId;
 
-    // SELF-HEALING: If path is missing locally, fetch from Database
-    if (storedPath == null && deviceId != null) {
+    debugPrint("🛠️ DEBUG - User ID: $userId");
+    debugPrint("🛠️ DEBUG - Local URL before heal: '$storedUrl'");
+
+    // FIX: Added `.isEmpty` check to catch blank strings!
+    if ((storedPath == null || storedUrl == null || storedUrl.isEmpty) &&
+        userId != null) {
+      debugPrint("🛠️ DEBUG - Attempting to self-heal from Supabase...");
       try {
         final data = await Supabase.instance.client
             .from('desktop_devices')
-            .select('vault_path')
-            .eq('device_id', deviceId)
+            .select('vault_path, public_url')
+            .eq('user_id', userId)
+            .not('public_url', 'is', null)
+            .limit(1)
             .maybeSingle();
 
-        if (data != null && data['vault_path'] != null) {
-          storedPath = data['vault_path'];
-          await prefs.setString(
-            'vault_path',
-            storedPath!,
-          ); // Save for next time
+        debugPrint("🛠️ DEBUG - Supabase returned: $data");
+
+        if (data != null) {
+          if (storedPath == null && data['vault_path'] != null) {
+            storedPath = data['vault_path'];
+            await prefs.setString('vault_path', storedPath!);
+          }
+          // Heal the Public URL!
+          if ((storedUrl == null || storedUrl.isEmpty) &&
+              data['public_url'] != null) {
+            storedUrl = data['public_url'];
+            storedUrl = storedUrl!
+                .replaceAll('https://', '')
+                .replaceAll('http://', '');
+            if (storedUrl.endsWith('/'))
+              storedUrl = storedUrl.substring(0, storedUrl.length - 1);
+            debugPrint("🛠️ DEBUG - Successfully healed URL to: $storedUrl");
+          }
+        } else {
+          debugPrint(
+            "❌ DEBUG - Supabase found NO device with a public_url for this user!",
+          );
         }
       } catch (e) {
-        print("Error fetching path from DB: $e");
+        debugPrint("❌ Error fetching config from DB: $e");
       }
     }
 
-    // Fallback (Only if DB fetch also failed)
-    if (storedPath == null) {
+    if (storedPath == null || storedPath.isEmpty) {
       if (Platform.isWindows) {
         storedPath = 'C:\\GuptikVault';
       } else {
@@ -69,15 +92,15 @@ class _VaultScreenState extends State<VaultScreen> {
       }
     }
 
-    // CRITICAL FIX: Append 'vault_files' to the path
-    // The Docker container maps this specific subfolder to /app/storage
     final String correctVaultPath =
         "$storedPath${Platform.pathSeparator}vault_files";
 
     if (mounted) {
       setState(() {
         _vaultPath = correctVaultPath;
-        _publicUrl = storedUrl;
+        _publicUrl = (storedUrl != null && storedUrl.isNotEmpty)
+            ? storedUrl
+            : null;
       });
       await _refreshFiles();
     }
@@ -310,16 +333,14 @@ class _VaultScreenState extends State<VaultScreen> {
                             // Save to Postgres
                             final token = await PostgresService()
                                 .createShareSettings(
-                                  fileName: file.fileName!,
+                                  fileName: file.fileName,
                                   isPublic: isPublic,
                                   emails: emails,
                                   expiresAt: selectedExpiration,
                                 );
 
                             // Build the URL
-                            final safeName = Uri.encodeComponent(
-                              file.fileName!,
-                            );
+                            final safeName = Uri.encodeComponent(file.fileName);
                             String link =
                                 "https://$_publicUrl/vault/files/$safeName";
                             if (!isPublic && token != null) {
@@ -462,10 +483,11 @@ class _VaultScreenState extends State<VaultScreen> {
   Widget _buildFileCard(VaultFile file) {
     final fType = (file.fileType ?? "").toLowerCase();
     final bool isImg = ['jpg', 'jpeg', 'png', 'webp'].contains(fType);
-    final safePath = file.filePath ?? "";
+    final safePath = file.filePath;
 
     return InkWell(
       onTap: () => _openFile(safePath),
+      onSecondaryTap: () => _handleShare(file),
       onLongPress: () => _handleShare(file),
       borderRadius: BorderRadius.circular(12),
       child: Container(
@@ -491,7 +513,7 @@ class _VaultScreenState extends State<VaultScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    file.fileName ?? "Unknown",
+                    file.fileName,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(color: Colors.white, fontSize: 12),

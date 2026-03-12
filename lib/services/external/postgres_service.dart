@@ -192,7 +192,7 @@ class PostgresService {
       Sql.named('''
         INSERT INTO vault_share_file 
         (file_name, emails_access_to, access_token, is_public, expires_at) 
-        VALUES (@fn, @emails, @token, @pub, @exp)
+        VALUES (@fn, @emails::TEXT[], @token, @pub, @exp)
       '''),
       parameters: {
         'fn': fileName,

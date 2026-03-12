@@ -142,7 +142,7 @@ void main() async {
 
   // DEBUG: Print startup
   print('Guptik Gateway Starting...');
-  
+
   // Ensure storage directory exists
   final storageDir = Directory('/app/storage');
   if (!await storageDir.exists()) {
@@ -156,13 +156,13 @@ void main() async {
     try {
       print('Starting upload for: $filename');
       final file = File('/app/storage/$filename');
-      
+
       // Use explicit sink control instead of pipe()
       sink = file.openWrite();
       await sink.addStream(req.read());
       await sink.flush();
       await sink.close();
-      
+
       final size = await file.length();
       final mimeType = lookupMimeType(file.path) ?? 'application/octet-stream';
       print('Upload complete. Size: $size bytes');
@@ -172,8 +172,7 @@ void main() async {
         print('Connecting to Postgres database...');
         final connection = await Connection.open(
           Endpoint(
-            host:
-                'db', // Matches the name of your Postgres container in docker-compose!
+            host: 'db', 
             port: 5432,
             database: 'postgres',
             username: 'postgres',
@@ -218,13 +217,145 @@ void main() async {
       return Response.internalServerError(body: 'UPLOAD ERROR: $e');
     }
   });
-  
-  // 2. DOWNLOAD FILE
+
+  // 2. DOWNLOAD / VIEW FILE (WITH ENTERPRISE SECURITY & EMAIL VERIFICATION)
   router.get('/vault/files/<filename>', (Request req, String filename) async {
-    final file = File('/app/storage/$filename');
-    if (!await file.exists()) return Response.notFound('File not found');
-    final mimeType = lookupMimeType(file.path) ?? 'application/octet-stream';
-    return Response.ok(file.openRead(), headers: {'Content-Type': mimeType});
+    print('\n--- NEW REQUEST FOR FILE: $filename ---');
+    try {
+      final token = req.url.queryParameters['token'];
+      final email = req.url.queryParameters['email'];
+      print('Token provided: $token');
+      print('Email provided: $email');
+
+      print('Connecting to Postgres...');
+      final connection = await Connection.open(
+        Endpoint(
+          host: 'db',
+          port: 5432,
+          database: 'postgres',
+          username: 'postgres',
+          password: 'GuptikSystemPassword2026',
+        ),
+        settings: const ConnectionSettings(sslMode: SslMode.disable),
+      );
+
+      print('Connected. Looking up file share rules...');
+      // 🛡️ FIXED: USING TRIPLE DOUBLE-QUOTES HERE
+      final result = await connection.execute(
+        Sql.named("""
+          SELECT is_public, access_token, emails_access_to, expires_at 
+          FROM vault_share_file 
+          WHERE file_name = @fn 
+          ORDER BY created_at DESC LIMIT 1
+        """),
+        parameters: {'fn': filename},
+      );
+
+      await connection.close();
+      print('Database query complete.');
+
+      if (result.isEmpty) {
+        print('Result is empty - file not shared.');
+        return Response.forbidden(
+          'Access Denied: This file has not been shared.',
+        );
+      }
+
+      final row = result.first;
+      final isPublic = row[0] as bool;
+      final dbToken = row[1]?.toString();
+
+      // 🛡️ ULTRA-SAFE ARRAY PARSING (Handles both Lists and Strings perfectly)
+      List<String> allowedEmails = [];
+      if (row[2] != null) {
+        if (row[2] is List) {
+          allowedEmails = (row[2] as List)
+              .map((e) => e.toString().toLowerCase().trim())
+              .toList();
+        } else if (row[2] is String) {
+          String cleanString = row[2]
+              .toString()
+              .replaceAll('{', '')
+              .replaceAll('}', '');
+          allowedEmails = cleanString
+              .split(',')
+              .map((e) => e.toLowerCase().trim())
+              .toList();
+        }
+      }
+      final expiresAt = row[3] as DateTime?;
+
+      print('Is Public: $isPublic');
+      print('Allowed Emails: $allowedEmails');
+
+      if (expiresAt != null && DateTime.now().toUtc().isAfter(expiresAt)) {
+        print('Link expired.');
+        return Response.forbidden('This link has expired.');
+      }
+
+      // PRIVATE FILE LOGIC
+      if (!isPublic) {
+        if (token != dbToken) {
+          print('Token mismatch. Provided: $token, Required: $dbToken');
+          return Response.forbidden('Invalid or missing access token.');
+        }
+
+        if (email == null || email.isEmpty) {
+          print('No email provided, serving HTML login page...');
+          // 🛡️ FIXED: USING TRIPLE DOUBLE-QUOTES HERE
+          final html =
+              """
+            <!DOCTYPE html>
+            <html>
+            <head>
+              <meta name="viewport" content="width=device-width, initial-scale=1">
+              <title>Guptik Secure Vault</title>
+            </head>
+            <body style="font-family: Arial, sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; background-color: #0F172A; color: white; margin: 0;">
+              <div style="background: #1E293B; padding: 40px; border-radius: 12px; text-align: center; box-shadow: 0 4px 15px rgba(0,0,0,0.5); max-width: 400px; width: 90%;">
+                <h2 style="color: #00E5FF; margin-top: 0;">Secure File Access</h2>
+                <p style="color: #94A3B8; font-size: 14px; margin-bottom: 24px;">This file is protected. Please enter your authorized email address to view it.</p>
+                <form method="GET">
+                  <input type="hidden" name="token" value="${token ?? ''}" />
+                  <input type="email" name="email" placeholder="Enter your email" required style="box-sizing: border-box; padding: 12px; width: 100%; margin-bottom: 20px; border-radius: 6px; border: 1px solid #334155; background: #0F172A; color: white; outline: none;" />
+                  <button type="submit" style="background: #00E5FF; color: black; padding: 12px 20px; width: 100%; border: none; border-radius: 6px; font-weight: bold; font-size: 16px; cursor: pointer;">Verify & View File</button>
+                </form>
+              </div>
+            </body>
+            </html>
+          """;
+          return Response.ok(html, headers: {'Content-Type': 'text/html'});
+        }
+
+        if (!allowedEmails.contains(email.toLowerCase().trim())) {
+          print('Email unauthorized: $email');
+          return Response.forbidden(
+            'Access Denied: Your email is not authorized to view this file.',
+          );
+        }
+      }
+
+      print('Serving actual file: $filename');
+      final file = File('/app/storage/$filename');
+      if (!await file.exists()) {
+        print('File physically missing from disk.');
+        return Response.notFound('File not found on server storage.');
+      }
+
+      final mimeType = lookupMimeType(file.path) ?? 'application/octet-stream';
+      return Response.ok(
+        file.openRead(),
+        headers: {
+          'Content-Type': mimeType,
+          'Content-Length': (await file.length()).toString(),
+          'Content-Disposition': 'inline; filename="$filename"',
+        },
+      );
+    } catch (e, stack) {
+      print('CRITICAL SERVER ERROR: $e');
+      print(stack);
+      return Response.internalServerError(body: 'Server Error');
+    }
   });
 
   // 3. LIST FILES
@@ -260,8 +391,13 @@ void main() async {
   router.get('/api/tags', (Request req) async {
     try {
       // Forward the exact request to the Ollama container
-      final response = await http.get(Uri.parse('http://ollama:11434/api/tags'));
-      return Response.ok(response.body, headers: {'Content-Type': 'application/json'});
+      final response = await http.get(
+        Uri.parse('http://ollama:11434/api/tags'),
+      );
+      return Response.ok(
+        response.body,
+        headers: {'Content-Type': 'application/json'},
+      );
     } catch (e) {
       print("Error fetching models from Ollama: $e");
       return Response.internalServerError(body: 'AI Offline');
@@ -274,10 +410,13 @@ void main() async {
   router.post('/api/chat', (Request req) async {
     try {
       final payload = await req.readAsString();
-      
+
       // We use a streamed client so we can pass the typing effect back to the phone
       final client = http.Client();
-      final proxyReq = http.Request('POST', Uri.parse('http://ollama:11434/api/chat'));
+      final proxyReq = http.Request(
+        'POST',
+        Uri.parse('http://ollama:11434/api/chat'),
+      );
       proxyReq.headers['Content-Type'] = 'application/json';
       proxyReq.body = payload;
 
@@ -285,22 +424,60 @@ void main() async {
 
       // Pipe the stream directly back to the mobile app!
       return Response.ok(
-        response.stream, 
-        headers: {'Content-Type': 'application/json'}
+        response.stream,
+        headers: {'Content-Type': 'application/json'},
       );
     } catch (e) {
       print("Error streaming from Ollama: $e");
       return Response.internalServerError(body: 'AI Offline');
     }
   });
-  
+
   router.get('/', (Request req) => Response.ok('GUPTIK GATEWAY ONLINE'));
 
-  final handler = Pipeline().addMiddleware(logRequests()).addHandler(router.call);
-  final server = await serve(handler, InternetAddress.anyIPv4, 8080);
-  print('Gateway listening on port ${server.port}');
+  // 6. RECEIVE SHARE RULES FROM MOBILE
+  router.post('/vault/share', (Request req) async {
+    try {
+      final payload = await req.readAsString();
+      final data = jsonDecode(payload);
 
-  // 6. DELETE FILE (Removes physical file AND database row)
+      final connection = await Connection.open(
+        Endpoint(
+          host: 'db',
+          port: 5432,
+          database: 'postgres',
+          username: 'postgres',
+          password: 'GuptikSystemPassword2026',
+        ),
+        settings: const ConnectionSettings(sslMode: SslMode.disable),
+      );
+
+      await connection.execute(
+        Sql.named("""
+          INSERT INTO vault_share_file (file_name, file_path, is_public, access_token, emails_access_to, created_at, expires_at) 
+          VALUES (@fn, @fp, @pub, @tok, @em, @ca, @ea)
+        """),
+        parameters: {
+          'fn': data['file_name'],
+          'fp': data['file_path'],
+          'pub': data['is_public'],
+          'tok': data['access_token'],
+          'em': data['emails_access_to'],
+          // Convert the strings from the mobile app back into real database times!
+          'ca': DateTime.parse(data['created_at']), 
+          'ea': data['expires_at'] != null ? DateTime.parse(data['expires_at']) : null,
+        },
+      );
+
+      await connection.close();
+      return Response.ok(jsonEncode({'status': 'success'}));
+    } catch (e) {
+      print('SHARE ERROR: $e');
+      return Response.internalServerError(body: 'Share Error: $e');
+    }
+  });
+
+  // 7. DELETE FILE (Removes physical file AND database row)
   router.delete('/vault/delete/<filename>', (
     Request req,
     String filename,
@@ -314,9 +491,7 @@ void main() async {
         await file.delete();
         print('Physical file deleted from storage.');
       } else {
-        print(
-          'Physical file not found, but continuing to database cleanup.',
-        );
+        print('Physical file not found, but continuing to database cleanup.');
       }
 
       // 2. Delete the record from the Postgres database
@@ -345,6 +520,13 @@ void main() async {
       return Response.internalServerError(body: 'Delete Error: $e');
     }
   });
+
+  // 🛡️ FIXED: SERVER STARTUP IS NOW AT THE VERY BOTTOM!
+  final handler = Pipeline()
+      .addMiddleware(logRequests())
+      .addHandler(router.call);
+  final server = await serve(handler, InternetAddress.anyIPv4, 8080);
+  print('Gateway listening on port ${server.port}');
 }
 ''');
   }
