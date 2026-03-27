@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:guptik_desktop/services/trustme/trust_me_service.dart';
+import '../../services/trustme/trust_me_service.dart';
 
 class SecureChatsScreen extends StatefulWidget {
   const SecureChatsScreen({super.key});
@@ -12,6 +12,12 @@ class _SecureChatsScreenState extends State<SecureChatsScreen> {
   List<ConversationSummary> _conversations = [];
   bool _isLoading = true;
   ConversationSummary? _selectedChat;
+
+  // 🚀 NEW: Controllers for the Chat UI
+  final TextEditingController _messageController = TextEditingController();
+  final ScrollController _scrollController = ScrollController();
+  List<Map<String, dynamic>> _activeMessages =
+      []; // Temporary list to hold UI messages
 
   @override
   void initState() {
@@ -35,12 +41,50 @@ class _SecureChatsScreenState extends State<SecureChatsScreen> {
     }
   }
 
+  // 🚀 NEW: Function to handle sending a message
+  Future<void> _sendMessage() async {
+    final text = _messageController.text.trim();
+    if (text.isEmpty || _selectedChat == null) return;
+
+    // 1. Instantly show it in the UI (Optimistic UI update)
+    setState(() {
+      _activeMessages.add({
+        'content': text,
+        'isMe': true,
+        'time': DateTime.now(),
+      });
+      _messageController.clear();
+    });
+
+    // Scroll to the bottom
+    Future.delayed(const Duration(milliseconds: 100), () {
+      if (_scrollController.hasClients) {
+        _scrollController.animateTo(
+          _scrollController.position.maxScrollExtent,
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeOut,
+        );
+      }
+    });
+
+    // 2. Send it to the Gateway to be encrypted and routed to the peer
+    try {
+      await TrustMeService.instance.sendMessage(
+        conversationId: _selectedChat!.id,
+        content: text,
+      );
+    } catch (e) {
+      debugPrint("Message failed to send: $e");
+      // In a real app, you would mark the bubble with a red "!" icon here
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Row(
       children: [
         // ---------------------------------------------------------
-        // LEFT PANEL: Conversation List (Fixed Width)
+        // LEFT PANEL: Conversation List
         // ---------------------------------------------------------
         Container(
           width: 320,
@@ -50,7 +94,6 @@ class _SecureChatsScreenState extends State<SecureChatsScreen> {
           ),
           child: Column(
             children: [
-              // Search Header
               Container(
                 padding: const EdgeInsets.all(16),
                 color: const Color(0xFF1E293B),
@@ -70,8 +113,6 @@ class _SecureChatsScreenState extends State<SecureChatsScreen> {
                   ),
                 ),
               ),
-
-              // Chat List
               Expanded(
                 child: _isLoading
                     ? const Center(
@@ -86,7 +127,6 @@ class _SecureChatsScreenState extends State<SecureChatsScreen> {
                         itemBuilder: (context, index) {
                           final chat = _conversations[index];
                           final isSelected = _selectedChat?.id == chat.id;
-
                           return _buildChatTile(chat, isSelected);
                         },
                       ),
@@ -96,7 +136,7 @@ class _SecureChatsScreenState extends State<SecureChatsScreen> {
         ),
 
         // ---------------------------------------------------------
-        // RIGHT PANEL: Active Message Thread (Expands to fill)
+        // RIGHT PANEL: Active Message Thread
         // ---------------------------------------------------------
         Expanded(
           child: _selectedChat == null
@@ -111,7 +151,12 @@ class _SecureChatsScreenState extends State<SecureChatsScreen> {
 
   Widget _buildChatTile(ConversationSummary chat, bool isSelected) {
     return InkWell(
-      onTap: () => setState(() => _selectedChat = chat),
+      onTap: () {
+        setState(() {
+          _selectedChat = chat;
+          _activeMessages.clear(); // Clear messages when switching chats
+        });
+      },
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         decoration: BoxDecoration(
@@ -120,7 +165,6 @@ class _SecureChatsScreenState extends State<SecureChatsScreen> {
         ),
         child: Row(
           children: [
-            // Avatar
             CircleAvatar(
               radius: 24,
               backgroundColor: Colors.cyanAccent.withAlpha(50),
@@ -133,7 +177,6 @@ class _SecureChatsScreenState extends State<SecureChatsScreen> {
               ),
             ),
             const SizedBox(width: 12),
-            // Name & Preview
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -156,7 +199,6 @@ class _SecureChatsScreenState extends State<SecureChatsScreen> {
                 ],
               ),
             ),
-            // Time & Unread Badge
             Column(
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
@@ -272,12 +314,13 @@ class _SecureChatsScreenState extends State<SecureChatsScreen> {
     );
   }
 
+  // 🚀 CHANGED: This is the real Message Thread UI!
   Widget _buildActiveChatArea() {
     return Container(
       color: const Color(0xFF0F172A),
       child: Column(
         children: [
-          // Top Chat Bar
+          // 1. Top Chat Bar
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
             decoration: const BoxDecoration(
@@ -307,9 +350,18 @@ class _SecureChatsScreenState extends State<SecureChatsScreen> {
                         fontWeight: FontWeight.bold,
                       ),
                     ),
-                    const Text(
-                      "E2E Encrypted Connection",
-                      style: TextStyle(color: Colors.cyanAccent, fontSize: 12),
+                    const Row(
+                      children: [
+                        Icon(Icons.lock, color: Colors.cyanAccent, size: 12),
+                        SizedBox(width: 4),
+                        Text(
+                          "E2E Encrypted Connection",
+                          style: TextStyle(
+                            color: Colors.cyanAccent,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ],
                     ),
                   ],
                 ),
@@ -326,17 +378,59 @@ class _SecureChatsScreenState extends State<SecureChatsScreen> {
             ),
           ),
 
-          // Message List Placeholder
+          // 2. Message List (The Bubbles)
           Expanded(
-            child: Center(
-              child: Text(
-                "Message thread implementation coming next!",
-                style: TextStyle(color: Colors.grey.shade600),
-              ),
-            ),
+            child: _activeMessages.isEmpty
+                ? Center(
+                    child: Text(
+                      "Send a message to start the secure chat.",
+                      style: TextStyle(color: Colors.grey.shade600),
+                    ),
+                  )
+                : ListView.builder(
+                    controller: _scrollController,
+                    padding: const EdgeInsets.all(24),
+                    itemCount: _activeMessages.length,
+                    itemBuilder: (context, index) {
+                      final msg = _activeMessages[index];
+                      final isMe = msg['isMe'] as bool;
+
+                      return Align(
+                        alignment: isMe
+                            ? Alignment.centerRight
+                            : Alignment.centerLeft,
+                        child: Container(
+                          margin: const EdgeInsets.only(bottom: 12),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 12,
+                          ),
+                          constraints: const BoxConstraints(maxWidth: 400),
+                          decoration: BoxDecoration(
+                            color: isMe
+                                ? const Color(0xFF006A60)
+                                : const Color(0xFF1E293B),
+                            borderRadius: BorderRadius.only(
+                              topLeft: const Radius.circular(16),
+                              topRight: const Radius.circular(16),
+                              bottomLeft: Radius.circular(isMe ? 16 : 0),
+                              bottomRight: Radius.circular(isMe ? 0 : 16),
+                            ),
+                          ),
+                          child: Text(
+                            msg['content'],
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 15,
+                            ),
+                          ),
+                        ),
+                      );
+                    },
+                  ),
           ),
 
-          // Bottom Input Bar
+          // 3. Bottom Input Bar
           Container(
             padding: const EdgeInsets.all(16),
             color: const Color(0xFF1E293B),
@@ -348,7 +442,10 @@ class _SecureChatsScreenState extends State<SecureChatsScreen> {
                 ),
                 Expanded(
                   child: TextField(
+                    controller: _messageController,
                     style: const TextStyle(color: Colors.white),
+                    // Allow hitting "Enter" to send on Desktop!
+                    onSubmitted: (_) => _sendMessage(),
                     decoration: InputDecoration(
                       hintText: "Type an encrypted message...",
                       hintStyle: TextStyle(color: Colors.grey.shade600),
@@ -369,7 +466,7 @@ class _SecureChatsScreenState extends State<SecureChatsScreen> {
                 FloatingActionButton(
                   mini: true,
                   backgroundColor: Colors.cyanAccent,
-                  onPressed: () {},
+                  onPressed: _sendMessage,
                   child: const Icon(Icons.send, color: Colors.black, size: 20),
                 ),
               ],

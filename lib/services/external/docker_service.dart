@@ -1,5 +1,7 @@
 import 'dart:io';
+import 'dart:math';
 import 'package:process_run/shell.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 class DockerService {
   String? _vaultPath;
@@ -15,7 +17,9 @@ class DockerService {
   }) async {
     if (_vaultPath == null) throw Exception("Vault path is not initialized");
 
-    // 1. PRE-CREATE ALL DIRECTORIES
+    const secureStorage = FlutterSecureStorage();
+    await secureStorage.write(key: 'public_url', value: publicUrl);
+
     final requiredDirs = [
       '$_vaultPath/data/postgres',
       '$_vaultPath/data/ollama',
@@ -32,7 +36,6 @@ class DockerService {
       }
     }
 
-    // 2. Generate .env
     final envFile = File('$_vaultPath/.env');
     await envFile.writeAsString('''
 POSTGRES_PASSWORD=$dbPass
@@ -44,10 +47,8 @@ N8N_USER=$email
 N8N_PASS=Gupt1k_pa55
 ''');
 
-    // 3. Generate Gateway Code
     await _generateGatewayFiles(publicUrl);
 
-    // 4. Generate docker-compose.yml
     final composeFile = File('$_vaultPath/docker-compose.yml');
     await composeFile.writeAsString('''
 services:
@@ -73,7 +74,7 @@ services:
       - ollama
 
   db:
-    image: postgres:15-alpine # <--- SWITCHED TO FAST, LIGHTWEIGHT POSTGRES
+    image: postgres:15-alpine
     restart: always
     ports:
       - "\${POSTGRES_PORT}:5432"
@@ -117,9 +118,6 @@ services:
   }
 
   Future<void> _generateGatewayFiles(String publicUrl) async {
-    // =========================================================
-    // DEPENDENCIES: GENERATE PUBSPEC.YAML
-    // =========================================================
     final pubspec = File('$_vaultPath/gateway/pubspec.yaml');
     await pubspec.writeAsString('''
 name: guptik_gateway
@@ -127,12 +125,8 @@ environment: {sdk: '>=3.0.0 <4.0.0'}
 dependencies: {shelf: ^1.4.0, shelf_router: ^1.1.0, http: ^1.1.0, mime: ^1.0.4, postgres: ^3.4.0, uuid: ^4.3.3}
 ''');
 
-    // =========================================================
-    // SERVER CODE: GENERATE SERVER.DART
-    // =========================================================
     final server = File('$_vaultPath/gateway/server.dart');
 
-    // 🛡️ FIXED: All internal SQL queries now use """ to prevent breaking the raw string!
     await server.writeAsString(r'''
 import 'dart:io';
 import 'dart:convert';
@@ -149,21 +143,14 @@ void main() async {
   final router = Router();
   final uuid = Uuid();
 
-  // DEBUG: Print startup
   print('Guptik Gateway Starting...');
 
-  // Ensure storage directory exists
   final storageDir = Directory('/app/storage');
   if (!await storageDir.exists()) {
     print('Creating storage directory at /app/storage');
     await storageDir.create(recursive: true);
   }
 
-  // =========================================================
-  // SECTION A: VAULT SYSTEM
-  // =========================================================
-
-  // 1. UPLOAD VAULT FILE
   router.post('/vault/upload/<filename>', (Request req, String filename) async {
     IOSink? sink;
     try {
@@ -197,7 +184,6 @@ void main() async {
     }
   });
 
-  // 2. DOWNLOAD / VIEW SECURE FILE
   router.get('/vault/files/<filename>', (Request req, String filename) async {
     try {
       final token = req.url.queryParameters['token'];
@@ -263,7 +249,6 @@ void main() async {
     }
   });
 
-  // 3. LIST VAULT FILES
   router.get('/vault/list', (Request req) {
     try {
       final dir = Directory('/app/storage');
@@ -273,7 +258,6 @@ void main() async {
     } catch (e) { return Response.internalServerError(body: 'List Error: $e'); }
   });
 
-  // 4. CREATE VAULT SHARE RULE
   router.post('/vault/share', (Request req) async {
     try {
       final payload = await req.readAsString();
@@ -294,7 +278,6 @@ void main() async {
     } catch (e) { return Response.internalServerError(body: 'Share Error: $e'); }
   });
 
-  // 5. DELETE VAULT FILE
   router.delete('/vault/delete/<filename>', (Request req, String filename) async {
     try {
       final file = File('/app/storage/$filename');
@@ -309,11 +292,6 @@ void main() async {
     } catch (e) { return Response.internalServerError(body: 'Delete Error: $e'); }
   });
 
-  // =========================================================
-  // SECTION B: OLLAMA AI SYSTEM
-  // =========================================================
-
-  // 6. OLLAMA PROXY - TAGS
   router.get('/api/tags', (Request req) async {
     try {
       final response = await http.get(Uri.parse('http://ollama:11434/api/tags'));
@@ -321,7 +299,6 @@ void main() async {
     } catch (e) { return Response.internalServerError(body: 'AI Offline'); }
   });
 
-  // 7. OLLAMA PROXY - CHAT STREAM
   router.post('/api/chat', (Request req) async {
     try {
       final payload = await req.readAsString();
@@ -334,7 +311,6 @@ void main() async {
     } catch (e) { return Response.internalServerError(body: 'AI Offline'); }
   });
 
-  // 8. MOBILE DATABASE SYNC - GET CHAT SESSIONS
   router.get('/api/sessions', (Request req) async {
     try {
       final connection = await Connection.open(
@@ -364,7 +340,6 @@ void main() async {
     }
   });
 
-  // 9. MOBILE DATABASE SYNC - GET CHAT HISTORY
   router.get('/api/history/<sessionId>', (Request req, String sessionId) async {
     try {
       final connection = await Connection.open(
@@ -391,7 +366,6 @@ void main() async {
     }
   });
 
-  // 10. MOBILE DATABASE SYNC - SAVE CHAT MESSAGE
   router.post('/api/chat/save', (Request req) async {
     try {
       final payload = await req.readAsString();
@@ -420,11 +394,6 @@ void main() async {
     }
   });
 
-  // =========================================================
-  // SECTION C: TRUST ME (V1) - P2P MESSAGING SYSTEM
-  // =========================================================
-
-  // 11. P2P: RECEIVE HANDSHAKE INITIATION
   router.post('/trustme/handshake/initiate', (Request req) async {
     try {
       final payload = await req.readAsString();
@@ -456,7 +425,6 @@ void main() async {
     }
   });
 
-  // 12. P2P: RECEIVE INCOMING MESSAGE
   router.post('/trustme/message/receive', (Request req) async {
     try {
       final payload = await req.readAsString();
@@ -474,14 +442,12 @@ void main() async {
       );
 
       if (contactResult.isEmpty) {
-         // Sender unknown -> Route to Unknown Inbox
          await connection.execute(
            Sql.named("INSERT INTO tm_unknown_inbox (source_type, sender_identifier, sender_username, content_encrypted, content_type) VALUES ('guptik_user', @sid, @user, @enc, @type)"),
            parameters: {'sid': senderId, 'user': data['sender_username'], 'enc': data['content_encrypted'], 'type': data['content_type'] ?? 'text'}
          );
          print("TRUST ME: Message routed to Unknown Inbox from $senderId");
       } else {
-         // Known Contact -> Store in Messages
          final convId = contactResult.first[0];
          await connection.execute(
            Sql.named("INSERT INTO tm_messages (id, conversation_id, sender_guptik_id, sender_username, content_encrypted, content_type, message_nonce) VALUES (@id, @cid, @sid, @user, @enc, @type, @nonce)"),
@@ -511,7 +477,6 @@ void main() async {
     }
   });
 
-  // 13. INTERNAL: SEND MESSAGE (Outbound to Peer)
   router.post('/internal/message/send', (Request req) async {
     try {
       final payload = await req.readAsString();
@@ -533,20 +498,41 @@ void main() async {
         return Response.notFound(jsonEncode({'error': 'Conversation not found'}));
       }
 
-      final targetUrl = convResult.first[0] as String;
+      // 🚀 BULLETPROOF URL CHECK
+      var targetUrl = convResult.first[0] as String;
+      if (!targetUrl.startsWith('http')) {
+        targetUrl = 'https://$targetUrl';
+      }
+
       final messageId = uuid.v4();
+      final myId = data['sender_id'] ?? 'unknown_user';
+      final myUsername = data['sender_username'] ?? 'Me';
+
+      // 🚀 FIX 1: Save the message in YOUR OWN database so you can see your own chat bubbles!
+      await connection.execute(
+        Sql.named("INSERT INTO tm_messages (id, conversation_id, sender_guptik_id, sender_username, content_encrypted, content_type, message_nonce) VALUES (@id, @cid, @sid, @user, @enc, @type, 'local_nonce')"),
+        parameters: {
+          'id': messageId,
+          'cid': conversationId,
+          'sid': myId, 
+          'user': myUsername,
+          'enc': data['content'],
+          'type': data['content_type'] ?? 'text'
+        }
+      );
 
       final outPayload = {
         'message_id': messageId,
-        'sender_username': 'Local_User', 
+        'sender_username': myUsername, 
         'content_encrypted': data['content'], 
         'content_type': data['content_type'] ?? 'text',
         'nonce': 'random_nonce_here'
       };
 
+      // 🚀 FIX 2: SEND TO PEER WITH REAL SENDER ID (No more unknown inbox!)
       final response = await http.post(
         Uri.parse('$targetUrl/trustme/message/receive'),
-        headers: {'Content-Type': 'application/json', 'X-Sender-ID': 'my_guptik_id_here'},
+        headers: {'Content-Type': 'application/json', 'X-Sender-ID': myId},
         body: jsonEncode(outPayload),
       );
 
@@ -563,12 +549,8 @@ void main() async {
       return Response.internalServerError(body: 'Send Error: $e');
     }
   });
+  
 
-  // =========================================================
-  // SECTION C.5: INTERNAL UI ROUTES (Feeds the Desktop App)
-  // =========================================================
-
-  // Fetch all conversations for the left sidebar
   router.get('/internal/conversations', (Request req) async {
     try {
       final connection = await Connection.open(
@@ -576,7 +558,6 @@ void main() async {
         settings: const ConnectionSettings(sslMode: SslMode.disable),
       );
 
-      // 🛡️ FIXED: Correctly using triple double-quotes instead of 6 single-quotes
       final result = await connection.execute("""
         SELECT c.id, c.type, ct.contact_username, c.last_message_preview, 
                c.last_message_at, c.unread_count, c.is_pinned, c.is_muted
@@ -599,12 +580,11 @@ void main() async {
 
       return Response.ok(jsonEncode({'conversations': conversations}), headers: {'Content-Type': 'application/json'});
     } catch (e) {
-      print("Error fetching conversations: \$e");
+      print("Error fetching conversations: $e");
       return Response.internalServerError(body: jsonEncode({'error': e.toString()}));
     }
   });
 
-  // Fetch handshake pending requests
   router.get('/internal/handshake/pending', (Request req) async {
     try {
       final connection = await Connection.open(
@@ -621,16 +601,13 @@ void main() async {
     }
   });
 
-  // Generate a new Handshake Code
   router.post('/internal/handshake/generate', (Request req) async {
     try {
       final payload = await req.readAsString();
       final data = jsonDecode(payload);
 
-      // 🚀 Generate a truly random 6-digit code
       final randomCode = (Random().nextInt(900000) + 100000).toString();
       
-      // In a real scenario, this randomly generates. For now, we mock the 6-digit code.
       return Response.ok(jsonEncode({
         'session_id': uuid.v4(),
         'code': randomCode,
@@ -642,11 +619,87 @@ void main() async {
     }
   });
 
-  // =========================================================
-  // SECTION D: SERVER STARTUP
-  // =========================================================
 
-  // 14. ROOT HEALTH CHECK
+  router.post('/internal/finalise_connection', (Request req) async {
+    final connection = await Connection.open(
+      Endpoint(host: 'db', port: 5432, database: 'postgres', username: 'postgres', password: 'GuptikSystemPassword2026'),
+      settings: const ConnectionSettings(sslMode: SslMode.disable),
+    );
+
+    final payload = await req.readAsString();
+    final data = jsonDecode(payload);
+    
+    final conversationId = uuid.v4();
+    final contactId = uuid.v4();
+    try {
+      // 🚀 INJECTING THE REAL KEYS DIRECTLY INTO THE DATABASE
+      await connection.execute(
+        Sql.named("""
+          INSERT INTO tm_contacts 
+          (id, contact_guptik_id, contact_username, contact_cloudflare_url, contact_identity_pubkey, contact_signed_prekey, contact_signed_prekey_id) 
+          VALUES (@id, @gid, @user, @url, @ipub, @spk, @spkid)
+        """),
+        parameters: {
+          'id': contactId,
+          'gid': data['counterpart_guptik_id'],
+          'user': data['counterpart_username'],
+          'url': data['counterpart_url'],
+          'ipub': data['contact_identity_pubkey'], // 🚀 Real Identity Key
+          'spk': data['contact_signed_prekey'],    // 🚀 Real PreKey
+          'spkid': data['contact_signed_prekey_id'], // 🚀 Real Key ID
+        },
+      );
+
+      await connection.execute(
+        Sql.named("INSERT INTO tm_conversations (id, type, contact_id, unread_count) VALUES (@id, 'one_on_one', @cid, 0)"),
+        parameters: {
+          'id': conversationId,
+          'cid': contactId,
+        },
+      );
+
+      await connection.close();
+      return Response.ok(jsonEncode({'status': 'success', 'conversation_id': conversationId}));
+    } catch (e) {
+      await connection.close();
+      print('LOCAL CONNECTION FINALISATION ERROR: $e');
+      return Response.internalServerError(body: jsonEncode({'error': e.toString()}));
+    }
+  });
+
+
+  router.get('/internal/messages/<conversationId>', (Request req, String conversationId) async {
+    try {
+      final connection = await Connection.open(
+        Endpoint(host: 'db', port: 5432, database: 'postgres', username: 'postgres', password: 'GuptikSystemPassword2026'),
+        settings: const ConnectionSettings(sslMode: SslMode.disable),
+      );
+
+      final result = await connection.execute(
+        Sql.named("""
+          SELECT id, sender_guptik_id, sender_username, content_encrypted, created_at 
+          FROM tm_messages 
+          WHERE conversation_id = @cid 
+          ORDER BY created_at ASC
+        """),
+        parameters: {'cid': conversationId}
+      );
+      await connection.close();
+
+      final messages = result.map((row) => {
+        'id': row[0].toString(),
+        'sender_id': row[1].toString(),
+        'sender_username': row[2].toString(),
+        'content': row[3].toString(), 
+        'created_at': row[4].toString(),
+      }).toList();
+
+      return Response.ok(jsonEncode({'messages': messages}), headers: {'Content-Type': 'application/json'});
+    } catch (e) {
+      return Response.internalServerError(body: jsonEncode({'error': e.toString()}));
+    }
+  });
+
   router.get('/', (Request req) => Response.ok('GUPTIK GATEWAY ONLINE'));
 
   final handler = Pipeline()
@@ -655,7 +708,7 @@ void main() async {
   final server = await serve(handler, InternetAddress.anyIPv4, 8080);
   print('Gateway listening on port ${server.port}');
 }
-'''); // 🛡️ FIXED: Correctly closed with three quotes instead of two
+''');
   }
 
   Future<void> stopStack() async {
@@ -664,7 +717,6 @@ void main() async {
         throw Exception("Vault path not set");
       }
 
-      // Run docker-compose down
       final result = await Process.run('docker-compose', [
         '-f',
         'docker-compose.yml',
@@ -699,7 +751,6 @@ void main() async {
     }
 
     await shell.run('$dockerCmd compose pull');
-    // Force rebuild to update server.dart
     await shell.run('$dockerCmd compose up -d --build --remove-orphans');
   }
 }

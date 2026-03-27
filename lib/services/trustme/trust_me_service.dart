@@ -1,6 +1,8 @@
 import 'dart:convert';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
 import 'package:web_socket_channel/web_socket_channel.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 class TrustMeService {
   static TrustMeService? _instance;
@@ -10,13 +12,10 @@ class TrustMeService {
   WebSocketChannel? _wsChannel;
   final _listeners = <String, List<Function(Map<String, dynamic>)>>{};
 
-  // Connects to your local Docker Gateway
   String get _gatewayUrl => 'http://localhost:55000';
-
-  // FIXED: String interpolation warning
   String get _wsUrl => '${_gatewayUrl.replaceFirst('http', 'ws')}/ws';
 
-  // ─── WebSocket Connection ──────────────────────────────────────────────
+  // Connects to your local Docker Gateway
   Future<void> connect() async {
     _wsChannel = WebSocketChannel.connect(Uri.parse(_wsUrl));
     _wsChannel!.stream.listen(
@@ -28,14 +27,23 @@ class TrustMeService {
           _listeners['*']?.forEach((cb) => cb(event));
         }
       },
-      // FIXED: Nullable return type warning
       onDone: () {
         Future.delayed(const Duration(seconds: 5), connect);
       },
     );
   }
 
-  // ─── Handshake ────────────────────────────────────────────────────────
+  void forceUIConversationsRefresh() {
+    if (_listeners['*'] != null) {
+      _listeners['*']?.forEach((cb) => cb({'type': 'connection_established'}));
+    }
+  }
+
+  // =========================================================
+  // SECTION C: TRUST ME (V1) - Signaling & Local Finalisation
+  // =========================================================
+
+  // Node A generates the code AND starts the Background Radar
   Future<Map<String, dynamic>> generateHandshakeCode(
     String targetUsername,
   ) async {
@@ -45,44 +53,219 @@ class TrustMeService {
       body: jsonEncode({'target_username': targetUsername}),
     );
 
-    // FIXED: Curly braces in flow control warning
-    if (response.statusCode != 200) {
-      throw Exception("Generation failed: ${response.body}");
-    }
-    return jsonDecode(response.body) as Map<String, dynamic>;
-  }
-
-  Future<Map<String, dynamic>> enterHandshakeCode({
-    required String code,
-    required String sessionId,
-  }) async {
-    final response = await http.post(
-      Uri.parse('$_gatewayUrl/internal/handshake/enter'),
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({'code': code, 'session_id': sessionId}),
-    );
-
-    // FIXED: Curly braces in flow control warning
-    if (response.statusCode != 200) {
-      throw Exception("Invalid code or session expired.");
-    }
-    return jsonDecode(response.body) as Map<String, dynamic>;
-  }
-
-  Future<List<Map<String, dynamic>>> getPendingRequests() async {
-    final response = await http.get(
-      Uri.parse('$_gatewayUrl/internal/handshake/pending'),
-    );
-
-    if (response.statusCode == 404) {
-      return [];
-    }
+    if (response.statusCode != 200) throw Exception("Generation failed");
 
     final data = jsonDecode(response.body) as Map<String, dynamic>;
-    return (data['pending'] as List).cast<Map<String, dynamic>>();
+    final code = data['code'];
+
+    try {
+      final supabase = Supabase.instance.client;
+      final userId = supabase.auth.currentUser?.id;
+
+      if (userId != null) {
+        const secureStorage = FlutterSecureStorage();
+        final myUsername =
+            await secureStorage.read(key: 'current_username') ?? 'Peer_A';
+
+        var myUrl = await secureStorage.read(key: 'public_url') ?? '';
+        if (myUrl.isNotEmpty && !myUrl.startsWith('http')) {
+          myUrl = 'https://$myUrl';
+        }
+
+        final myIdentityKey =
+            await secureStorage.read(key: 'my_identity_pubkey') ?? '';
+        final mySignedPreKey =
+            await secureStorage.read(key: 'my_signed_prekey') ?? '';
+        final mySignedPreKeyId =
+            await secureStorage.read(key: 'my_signed_prekey_id') ?? '0';
+
+        // 1. Upload Node A's details to Supabase
+        await supabase.from('trust_me_secure_invites').insert({
+          'creator_id': userId,
+          'invite_code': code,
+          'creator_username': myUsername,
+          'creator_cloudflare_url': myUrl,
+          'creator_identity_pubkey': myIdentityKey,
+          'creator_signed_prekey': mySignedPreKey,
+          'creator_signed_prekey_id': int.parse(mySignedPreKeyId),
+        });
+
+        print("✅ Invite logged. Launching Background Radar...");
+
+        // 🚀 THE FIX: Start radar in the background so it doesn't freeze the app!
+        _startActiveRadar(code);
+      }
+    } catch (e) {
+      print("⚠️ Supabase Invite Insert Error: $e");
+    }
+
+    // Instantly returns the code to the UI while radar spins in the background!
+    return data;
   }
 
-  // ─── Conversations (RESTORED MISSING METHOD) ───────────────────────────
+  // 🚀 NEW BACKGROUND FUNCTION: Watches Supabase for 5 Full Minutes
+  Future<void> _startActiveRadar(String code) async {
+    final supabase = Supabase.instance.client;
+    bool nodeBJoined = false;
+    int attempts = 0;
+
+    // Check every 3 seconds for up to 5 minutes (100 attempts)
+    while (!nodeBJoined && attempts < 100) {
+      await Future.delayed(const Duration(seconds: 3));
+      attempts++;
+
+      try {
+        final checkResult = await supabase
+            .from('trust_me_secure_invites')
+            .select()
+            .eq('invite_code', code)
+            .maybeSingle();
+
+        // If Node B's ID is suddenly in the row, they joined!
+        if (checkResult != null && checkResult['connected_with'] != null) {
+          nodeBJoined = true;
+          print(
+            "🎉 RADAR HIT! Node B Joined! Finalising Node A's local database...",
+          );
+
+          await finaliseHandshakeLocallyForNodeA(
+            joinerGId: checkResult['connected_with'],
+            joinerUsername: checkResult['joiner_username'] ?? 'Peer_B',
+            joinerUrl: checkResult['joiner_cloudflare_url'],
+            identityKey: checkResult['joiner_identity_pubkey'] ?? 'pending',
+            signedPreKey: checkResult['joiner_signed_prekey'] ?? 'pending',
+            signedPreKeyId: checkResult['joiner_signed_prekey_id'] ?? 0,
+          );
+        }
+      } catch (e) {
+        // Silently ignore temporary read errors while polling
+      }
+    }
+
+    if (!nodeBJoined) {
+      print("⚠️ Radar stopped. Node B never joined within 5 minutes.");
+    }
+  }
+
+  // Node B claims the invite AND downloads Node A's Real Keys
+  Future<Map<String, dynamic>> initiatePeerConnection({
+    required String peerUrl,
+    required String code,
+    required String myUsername,
+    required String myUrl,
+  }) async {
+    var target = peerUrl.trim();
+    if (!target.startsWith('http')) target = 'https://$target';
+    target = target.replaceAll(RegExp(r'/$'), '');
+
+    try {
+      final supabase = Supabase.instance.client;
+      final myUserId = supabase.auth.currentUser?.id;
+
+      if (myUserId != null) {
+        final inviteResult = await supabase
+            .from('trust_me_secure_invites')
+            .select()
+            .eq('invite_code', code)
+            .maybeSingle();
+        if (inviteResult == null)
+          throw Exception("Invalid or expired invite code.");
+
+        final creatorId = inviteResult['creator_id'];
+        final creatorUsername = inviteResult['creator_username'] ?? 'Peer_A';
+
+        var creatorUrl = inviteResult['creator_cloudflare_url'] ?? target;
+        if (creatorUrl.isNotEmpty && !creatorUrl.startsWith('http')) {
+          creatorUrl = 'https://$creatorUrl';
+        }
+
+        final creatorIdentity = inviteResult['creator_identity_pubkey'];
+        final creatorPrekey = inviteResult['creator_signed_prekey'];
+        final creatorPrekeyId = inviteResult['creator_signed_prekey_id'];
+
+        const secureStorage = FlutterSecureStorage();
+        final myIdentityKey =
+            await secureStorage.read(key: 'my_identity_pubkey') ?? '';
+        final mySignedPreKey =
+            await secureStorage.read(key: 'my_signed_prekey') ?? '';
+        final mySignedPreKeyId =
+            await secureStorage.read(key: 'my_signed_prekey_id') ?? '0';
+
+        // Node B uploads its own keys to Supabase so Node A's Radar can find them
+        await supabase
+            .from('trust_me_secure_invites')
+            .update({
+              'connected_with': myUserId,
+              'joiner_username': myUsername,
+              'joiner_cloudflare_url': myUrl,
+              'joiner_identity_pubkey': myIdentityKey,
+              'joiner_signed_prekey': mySignedPreKey,
+              'joiner_signed_prekey_id': int.parse(mySignedPreKeyId),
+            })
+            .eq('id', inviteResult['id']);
+
+        // Pass Node A's real keys to the local Postgres Database
+        await _finaliseConnectionLocally(
+          counterpartGId: creatorId,
+          counterpartUsername: creatorUsername,
+          counterpartUrl: creatorUrl,
+          identityKey: creatorIdentity ?? 'pending',
+          signedPreKey: creatorPrekey ?? 'pending',
+          signedPreKeyId: creatorPrekeyId ?? 0,
+        );
+
+        return {'status': 'linked_and_finalised_locally'};
+      }
+    } catch (e) {
+      throw Exception("Supabase linking failed: $e");
+    }
+    throw Exception("Authentication error.");
+  }
+
+  // INTERNAL: Sends the real keys to the Docker Gateway
+  Future<void> _finaliseConnectionLocally({
+    required String counterpartGId,
+    required String counterpartUsername,
+    required String counterpartUrl,
+    required String identityKey,
+    required String signedPreKey,
+    required int signedPreKeyId,
+  }) async {
+    final response = await http.post(
+      Uri.parse('$_gatewayUrl/internal/finalise_connection'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'counterpart_guptik_id': counterpartGId,
+        'counterpart_username': counterpartUsername,
+        'counterpart_url': counterpartUrl,
+        'contact_identity_pubkey': identityKey,
+        'contact_signed_prekey': signedPreKey,
+        'contact_signed_prekey_id': signedPreKeyId,
+      }),
+    );
+    if (response.statusCode != 200) throw Exception("Local DB failure");
+    forceUIConversationsRefresh();
+  }
+
+  Future<void> finaliseHandshakeLocallyForNodeA({
+    required String joinerGId,
+    required String joinerUsername,
+    required String joinerUrl,
+    String identityKey = 'pending_key_exchange',
+    String signedPreKey = 'pending_signed_prekey',
+    int signedPreKeyId = 0,
+  }) async {
+    await _finaliseConnectionLocally(
+      counterpartGId: joinerGId,
+      counterpartUsername: joinerUsername,
+      counterpartUrl: joinerUrl,
+      identityKey: identityKey,
+      signedPreKey: signedPreKey,
+      signedPreKeyId: signedPreKeyId,
+    );
+  }
+
+  // Fetch conversations from local DB for side list
   Future<List<ConversationSummary>> getConversations() async {
     final response = await http.get(
       Uri.parse('$_gatewayUrl/internal/conversations'),
@@ -104,6 +287,13 @@ class TrustMeService {
     required String content,
     String contentType = 'text',
   }) async {
+    // 🚀 NEW: Grab your real ID and Username to send to the Gateway!
+    final myUserId =
+        Supabase.instance.client.auth.currentUser?.id ?? 'unknown_user';
+    final myUsername =
+        await const FlutterSecureStorage().read(key: 'current_username') ??
+        'Me';
+
     final response = await http.post(
       Uri.parse('$_gatewayUrl/internal/message/send'),
       headers: {'Content-Type': 'application/json'},
@@ -111,13 +301,24 @@ class TrustMeService {
         'conversation_id': conversationId,
         'content': content,
         'content_type': contentType,
+        'sender_id': myUserId, // 🚀 Tell the Gateway who you are
+        'sender_username': myUsername, // 🚀 Tell the Gateway your name
       }),
     );
     return jsonDecode(response.body) as Map<String, dynamic>;
   }
-}
 
-// ─── RESTORED MISSING DATA MODELS ──────────────────────────────────────────
+  Future<List<Map<String, dynamic>>> getMessages(String conversationId) async {
+    final response = await http.get(
+      Uri.parse('$_gatewayUrl/internal/messages/$conversationId'),
+    );
+
+    if (response.statusCode == 404) return [];
+
+    final data = jsonDecode(response.body) as Map<String, dynamic>;
+    return (data['messages'] as List).cast<Map<String, dynamic>>();
+  }
+}
 
 class ConversationSummary {
   final String id;
