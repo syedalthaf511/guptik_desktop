@@ -1,4 +1,6 @@
+import 'dart:async'; // 🚀 ADDED: For the Timer
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart'; // 🚀 ADDED: To check your own ID
 import '../../services/trustme/trust_me_service.dart';
 
 class SecureChatsScreen extends StatefulWidget {
@@ -13,50 +15,109 @@ class _SecureChatsScreenState extends State<SecureChatsScreen> {
   bool _isLoading = true;
   ConversationSummary? _selectedChat;
 
-  // 🚀 NEW: Controllers for the Chat UI
   final TextEditingController _messageController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
-  List<Map<String, dynamic>> _activeMessages =
-      []; // Temporary list to hold UI messages
+  List<Map<String, dynamic>> _activeMessages = [];
+
+  // 🚀 NEW: Heartbeat Variables
+  Timer? _messageTimer;
+  String _myUserId = '';
+  int _previousMessageCount = 0;
 
   @override
   void initState() {
     super.initState();
+    // 1. Grab your own ID so we know which chat bubbles are yours (Green vs Blue)
+    _myUserId = Supabase.instance.client.auth.currentUser?.id ?? '';
+
     _fetchConversations();
+
+    // 🚀 2. THE HEARTBEAT: Check for new messages every 1.5 seconds!
+    _messageTimer = Timer.periodic(const Duration(milliseconds: 1500), (timer) {
+      if (_selectedChat != null) {
+        _loadActiveMessages();
+      }
+      // Also refresh the side list occasionally to update unread counts
+      if (timer.tick % 3 == 0) {
+        _fetchConversationsLocally();
+      }
+    });
+  }
+
+  // Helper to fetch side list without showing loading spinners every 4 seconds
+  Future<void> _fetchConversationsLocally() async {
+    try {
+      final chats = await TrustMeService.instance.getConversations();
+      if (mounted) setState(() => _conversations = chats);
+    } catch (_) {}
   }
 
   Future<void> _fetchConversations() async {
     setState(() => _isLoading = true);
+    await _fetchConversationsLocally();
+    if (mounted) setState(() => _isLoading = false);
+  }
+
+  // 🚀 NEW: Grabs the real messages from Docker and puts them on screen!
+  Future<void> _loadActiveMessages() async {
+    if (_selectedChat == null) return;
+
     try {
-      final chats = await TrustMeService.instance.getConversations();
-      if (mounted) {
-        setState(() {
-          _conversations = chats;
-          _isLoading = false;
+      final dbMessages = await TrustMeService.instance.getMessages(
+        _selectedChat!.id,
+      );
+
+      if (!mounted) return;
+
+      // Map the DB data to your UI format
+      final List<Map<String, dynamic>> formattedMessages = dbMessages.map((
+        msg,
+      ) {
+        return {
+          'content': msg['content'],
+          'isMe': msg['sender_id'] == _myUserId, // 🚀 Checks if you sent it!
+          'time':
+              DateTime.tryParse(msg['created_at'].toString()) ?? DateTime.now(),
+        };
+      }).toList();
+
+      setState(() {
+        _activeMessages = formattedMessages;
+      });
+
+      // 🚀 Smart Auto-Scroll: Only jump to bottom if a NEW message arrived
+      if (formattedMessages.length > _previousMessageCount) {
+        _previousMessageCount = formattedMessages.length;
+        Future.delayed(const Duration(milliseconds: 100), () {
+          if (_scrollController.hasClients) {
+            _scrollController.animateTo(
+              _scrollController.position.maxScrollExtent,
+              duration: const Duration(milliseconds: 300),
+              curve: Curves.easeOut,
+            );
+          }
         });
       }
     } catch (e) {
-      debugPrint("Failed to load conversations: $e");
-      if (mounted) setState(() => _isLoading = false);
+      debugPrint("Failed to load messages: $e");
     }
   }
 
-  // 🚀 NEW: Function to handle sending a message
   Future<void> _sendMessage() async {
     final text = _messageController.text.trim();
     if (text.isEmpty || _selectedChat == null) return;
 
-    // 1. Instantly show it in the UI (Optimistic UI update)
+    // 1. Optimistic UI update
     setState(() {
       _activeMessages.add({
         'content': text,
         'isMe': true,
         'time': DateTime.now(),
       });
+      _previousMessageCount++;
       _messageController.clear();
     });
 
-    // Scroll to the bottom
     Future.delayed(const Duration(milliseconds: 100), () {
       if (_scrollController.hasClients) {
         _scrollController.animateTo(
@@ -67,16 +128,25 @@ class _SecureChatsScreenState extends State<SecureChatsScreen> {
       }
     });
 
-    // 2. Send it to the Gateway to be encrypted and routed to the peer
+    // 2. Send to Gateway
     try {
       await TrustMeService.instance.sendMessage(
         conversationId: _selectedChat!.id,
         content: text,
       );
+      // The heartbeat timer will fetch the official DB copy in 1.5 seconds!
     } catch (e) {
       debugPrint("Message failed to send: $e");
-      // In a real app, you would mark the bubble with a red "!" icon here
     }
+  }
+
+  @override
+  void dispose() {
+    // 🚀 CRITICAL: Kill the timer when leaving the screen to save memory!
+    _messageTimer?.cancel();
+    _messageController.dispose();
+    _scrollController.dispose();
+    super.dispose();
   }
 
   @override
@@ -154,8 +224,11 @@ class _SecureChatsScreenState extends State<SecureChatsScreen> {
       onTap: () {
         setState(() {
           _selectedChat = chat;
-          _activeMessages.clear(); // Clear messages when switching chats
+          _activeMessages.clear();
+          _previousMessageCount = 0;
         });
+        // 🚀 Fetch immediately on tap so you don't have to wait 1.5s
+        _loadActiveMessages();
       },
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
@@ -314,7 +387,6 @@ class _SecureChatsScreenState extends State<SecureChatsScreen> {
     );
   }
 
-  // 🚀 CHANGED: This is the real Message Thread UI!
   Widget _buildActiveChatArea() {
     return Container(
       color: const Color(0xFF0F172A),
@@ -408,8 +480,8 @@ class _SecureChatsScreenState extends State<SecureChatsScreen> {
                           constraints: const BoxConstraints(maxWidth: 400),
                           decoration: BoxDecoration(
                             color: isMe
-                                ? const Color(0xFF006A60)
-                                : const Color(0xFF1E293B),
+                                ? const Color(0xFF006A60) // 🚀 Green for you
+                                : const Color(0xFF1E293B), // 🚀 Blue for them
                             borderRadius: BorderRadius.only(
                               topLeft: const Radius.circular(16),
                               topRight: const Radius.circular(16),
@@ -444,7 +516,6 @@ class _SecureChatsScreenState extends State<SecureChatsScreen> {
                   child: TextField(
                     controller: _messageController,
                     style: const TextStyle(color: Colors.white),
-                    // Allow hitting "Enter" to send on Desktop!
                     onSubmitted: (_) => _sendMessage(),
                     decoration: InputDecoration(
                       hintText: "Type an encrypted message...",
