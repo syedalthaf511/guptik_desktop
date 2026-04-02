@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io'; // 🚀 ADDED: To read files natively from Windows
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
 import 'package:web_socket_channel/web_socket_channel.dart';
@@ -87,7 +88,8 @@ class TrustMeService {
           'creator_cloudflare_url': myUrl,
           'creator_identity_pubkey': myIdentityKey,
           'creator_signed_prekey': mySignedPreKey,
-          'creator_signed_prekey_id': int.parse(mySignedPreKeyId),
+          // 🚀 CRITICAL FIX: Safe parsing so empty strings don't crash!
+          'creator_signed_prekey_id': int.tryParse(mySignedPreKeyId) ?? 0,
         });
 
         print("✅ Invite logged. Launching Background Radar...");
@@ -200,7 +202,8 @@ class TrustMeService {
               'joiner_cloudflare_url': myUrl,
               'joiner_identity_pubkey': myIdentityKey,
               'joiner_signed_prekey': mySignedPreKey,
-              'joiner_signed_prekey_id': int.parse(mySignedPreKeyId),
+              // 🚀 CRITICAL FIX: Safe parsing!
+              'joiner_signed_prekey_id': int.tryParse(mySignedPreKeyId) ?? 0,
             })
             .eq('id', inviteResult['id']);
 
@@ -211,7 +214,8 @@ class TrustMeService {
           counterpartUrl: creatorUrl,
           identityKey: creatorIdentity ?? 'pending',
           signedPreKey: creatorPrekey ?? 'pending',
-          signedPreKeyId: creatorPrekeyId ?? 0,
+          // 🚀 CRITICAL FIX: Safe parsing for incoming Supabase data!
+          signedPreKeyId: int.tryParse(creatorPrekeyId?.toString() ?? '0') ?? 0,
         );
 
         return {'status': 'linked_and_finalised_locally'};
@@ -282,12 +286,13 @@ class TrustMeService {
   }
 
   // ─── Messaging ────────────────────────────────────────────────────────
+  
+  // Sends standard text messages (Uses JSON)
   Future<Map<String, dynamic>> sendMessage({
     required String conversationId,
     required String content,
     String contentType = 'text',
   }) async {
-    // 🚀 NEW: Grab your real ID and Username to send to the Gateway!
     final myUserId =
         Supabase.instance.client.auth.currentUser?.id ?? 'unknown_user';
     final myUsername =
@@ -301,22 +306,76 @@ class TrustMeService {
         'conversation_id': conversationId,
         'content': content,
         'content_type': contentType,
-        'sender_id': myUserId, // 🚀 Tell the Gateway who you are
-        'sender_username': myUsername, // 🚀 Tell the Gateway your name
+        'sender_id': myUserId,
+        'sender_username': myUsername, 
       }),
     );
     return jsonDecode(response.body) as Map<String, dynamic>;
   }
 
-  Future<List<Map<String, dynamic>>> getMessages(String conversationId) async {
-    final response = await http.get(
-      Uri.parse('$_gatewayUrl/internal/messages/$conversationId'),
+  // 🚀 BRAND NEW: Streams massive media files (Bypasses JSON, no memory freezing!)
+  Future<Map<String, dynamic>> streamMediaFile({
+    required String conversationId,
+    required String filePath,
+    required String contentType,
+  }) async {
+    final myUserId =
+        Supabase.instance.client.auth.currentUser?.id ?? 'unknown_user';
+    final myUsername =
+        await const FlutterSecureStorage().read(key: 'current_username') ??
+        'Me';
+
+    final file = File(filePath);
+    final ext = filePath.split('.').last.toLowerCase();
+    final length = await file.length();
+
+    // 1. Create a raw StreamedRequest pointing to our new Docker endpoint
+    final request = http.StreamedRequest(
+      'POST',
+      Uri.parse('$_gatewayUrl/internal/message/stream_send/$conversationId/$ext'),
     );
 
-    if (response.statusCode == 404) return [];
+    // 2. Add the tracking headers so Docker knows who is sending it
+    request.headers['x-sender-id'] = myUserId;
+    request.headers['x-sender-username'] = myUsername;
+    request.headers['x-content-type'] = contentType;
+    request.contentLength = length;
 
-    final data = jsonDecode(response.body) as Map<String, dynamic>;
-    return (data['messages'] as List).cast<Map<String, dynamic>>();
+    // 3. 🚀 The Magic: Pipe the file directly from the hard drive to the network!
+    file.openRead().listen(
+      request.sink.add,
+      onDone: request.sink.close,
+      onError: request.sink.addError,
+    );
+
+    // 4. Send and wait for the Gateway to say it was delivered
+    final response = await request.send();
+    final responseBody = await response.stream.bytesToString();
+
+    if (response.statusCode != 200) {
+      throw Exception("Stream Upload Failed: $responseBody");
+    }
+
+    return jsonDecode(responseBody) as Map<String, dynamic>;
+  }
+
+  // 🚀 UPDATED: Crash-proof message fetching!
+  Future<List<Map<String, dynamic>>> getMessages(String conversationId) async {
+    try {
+      final response = await http.get(
+        Uri.parse('$_gatewayUrl/internal/messages/$conversationId'),
+      );
+
+      // If Docker is rebooting or crashing, safely return an empty list instead of panicking
+      if (response.statusCode != 200 || response.body.isEmpty) return [];
+
+      final data = jsonDecode(response.body);
+      if (data == null || data['messages'] == null) return [];
+
+      return (data['messages'] as List).cast<Map<String, dynamic>>();
+    } catch (e) {
+      return []; // Safety net to prevent UI crashing
+    }
   }
 }
 
@@ -324,6 +383,7 @@ class ConversationSummary {
   final String id;
   final String type;
   final String? contactUsername;
+  final String? customUsername;
   final String? lastMessagePreview;
   final DateTime? lastMessageAt;
   final int unreadCount;
@@ -331,10 +391,19 @@ class ConversationSummary {
   final bool isPinned;
   final bool isMuted;
 
+  // 🚀 MAGIC HELPER: If customUsername exists, show it. Otherwise, show the default username!
+  String get displayName {
+    if (customUsername != null && customUsername!.trim().isNotEmpty) {
+      return customUsername!;
+    }
+    return contactUsername ?? "Unknown";
+  }
+
   ConversationSummary({
     required this.id,
     required this.type,
     this.contactUsername,
+    this.customUsername,
     this.lastMessagePreview,
     this.lastMessageAt,
     required this.unreadCount,
@@ -348,6 +417,7 @@ class ConversationSummary {
         id: json['id'] as String,
         type: json['type'] as String,
         contactUsername: json['contact_username'] as String?,
+        customUsername: json['custom_username'] as String?,
         lastMessagePreview: json['last_message_preview'] as String?,
         lastMessageAt: json['last_message_at'] != null
             ? DateTime.parse(json['last_message_at'] as String)

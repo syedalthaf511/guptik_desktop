@@ -5,9 +5,12 @@ import 'package:window_manager/window_manager.dart';
 import 'screens/auth/login_screen.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'screens/auth/boot_screen.dart';
+import 'package:video_player_win/video_player_win.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  WindowsVideoPlayer.registerWith();
 
   // 1. Initialize Window Manager (for Desktop)
   await windowManager.ensureInitialized();
@@ -25,6 +28,7 @@ void main() async {
   });
 
   // 2. INITIALIZE SUPABASE (Critical Step)
+  
   // This must happen before any screen tries to access the database.
   await Supabase.initialize(
     url: 'https://base.myqrmart.com',

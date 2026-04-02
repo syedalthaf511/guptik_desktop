@@ -51,6 +51,12 @@ class PostgresService {
       );
       _isConnected = true;
       print("✅ Database Connected!");
+      // 🚀 THE MIGRATION FIX: Check and add the column every time we connect!
+      try {
+        await _connection!.execute('ALTER TABLE tm_contacts ADD COLUMN IF NOT EXISTS custom_username TEXT;');
+        print("✅ DB Check: custom_username column is ready.");
+      } catch (_) {}
+
     } catch (e) {
       print("❌ Database Connection Failed: $e");
     }
@@ -80,6 +86,11 @@ class PostgresService {
       );
       _isConnected = true;
       print("DB: Re-connected successfully as $safeUser");
+// 🚀 THE MIGRATION FIX: Check and add the column every time we connect!
+      try {
+        await _connection!.execute('ALTER TABLE tm_contacts ADD COLUMN IF NOT EXISTS custom_username TEXT;');
+      } catch (_) {}
+
     } catch (e) {
       print("DB Re-connect Error: $e");
       rethrow;
@@ -295,6 +306,7 @@ class PostgresService {
         id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
         contact_guptik_id TEXT NOT NULL UNIQUE,
         contact_username TEXT NOT NULL,
+        custom_username TEXT, -- 🚀 ADDED: Allows local user to rename contact
         contact_cloudflare_url TEXT NOT NULL,
         contact_identity_pubkey TEXT NOT NULL,
         contact_signed_prekey TEXT NOT NULL,
@@ -310,6 +322,14 @@ class PostgresService {
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )
     ''');
+    
+    // 🚀 SAFEGUARD: Add column if table already exists in older DB
+    try {
+      await conn.execute(
+        'ALTER TABLE tm_contacts ADD COLUMN IF NOT EXISTS custom_username TEXT;'
+      );
+    } catch (_) {}
+
     await conn.execute(
       'CREATE INDEX IF NOT EXISTS idx_tm_contacts_username ON tm_contacts(contact_username)',
     );

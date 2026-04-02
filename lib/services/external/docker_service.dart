@@ -151,6 +151,55 @@ void main() async {
     await storageDir.create(recursive: true);
   }
 
+ // 🚀 UPGRADED: Stream-Aware Media Route (Supports 206 Partial Content for Video Players!)
+  router.get('/internal/media/<filename>', (Request req, String filename) async {
+    try {
+      final file = File('/app/storage/$filename');
+      if (!await file.exists()) return Response.notFound('File not found.');
+      
+      final fileSize = await file.length();
+      final mimeType = lookupMimeType(file.path) ?? 'video/mp4'; 
+      final rangeHeader = req.headers['range'];
+
+      // 🎥 If a Video Player asks for a specific chunk of the video...
+      if (rangeHeader != null && rangeHeader.startsWith('bytes=')) {
+        final parts = rangeHeader.substring(6).split('-');
+        final start = int.tryParse(parts[0]) ?? 0;
+        final end = parts.length > 1 && parts[1].isNotEmpty 
+            ? int.tryParse(parts[1]) ?? fileSize - 1 
+            : fileSize - 1;
+
+        if (start >= fileSize) {
+          return Response(416, headers: {'Content-Range': 'bytes */$fileSize'});
+        }
+
+        final contentLength = end - start + 1;
+        final stream = file.openRead(start, end + 1);
+
+        // Return exactly the chunk the player asked for!
+        return Response(
+          206, // 206 means "Partial Content"
+          body: stream,
+          headers: {
+            'Content-Type': mimeType,
+            'Content-Length': contentLength.toString(),
+            'Content-Range': 'bytes $start-$end/$fileSize',
+            'Accept-Ranges': 'bytes',
+          },
+        );
+      } else {
+        // 🖼️ Fallback for Images (They download the whole file at once)
+        return Response.ok(file.openRead(), headers: {
+          'Content-Type': mimeType,
+          'Content-Length': fileSize.toString(),
+          'Accept-Ranges': 'bytes',
+        });
+      }
+    } catch (e) {
+      return Response.internalServerError(body: 'Media Error');
+    }
+  });
+
   router.post('/vault/upload/<filename>', (Request req, String filename) async {
     IOSink? sink;
     try {
@@ -498,7 +547,6 @@ void main() async {
         return Response.notFound(jsonEncode({'error': 'Conversation not found'}));
       }
 
-      // 🚀 BULLETPROOF URL CHECK
       var targetUrl = convResult.first[0] as String;
       if (!targetUrl.startsWith('http')) {
         targetUrl = 'https://$targetUrl';
@@ -508,7 +556,6 @@ void main() async {
       final myId = data['sender_id'] ?? 'unknown_user';
       final myUsername = data['sender_username'] ?? 'Me';
 
-      // 🚀 FIX 1: Save the message in YOUR OWN database so you can see your own chat bubbles!
       await connection.execute(
         Sql.named("INSERT INTO tm_messages (id, conversation_id, sender_guptik_id, sender_username, content_encrypted, content_type, message_nonce) VALUES (@id, @cid, @sid, @user, @enc, @type, 'local_nonce')"),
         parameters: {
@@ -529,7 +576,6 @@ void main() async {
         'nonce': 'random_nonce_here'
       };
 
-      // 🚀 FIX 2: SEND TO PEER WITH REAL SENDER ID (No more unknown inbox!)
       final response = await http.post(
         Uri.parse('$targetUrl/trustme/message/receive'),
         headers: {'Content-Type': 'application/json', 'X-Sender-ID': myId},
@@ -549,7 +595,110 @@ void main() async {
       return Response.internalServerError(body: 'Send Error: $e');
     }
   });
-  
+
+  router.post('/internal/message/stream_send/<conversationId>/<ext>', (Request req, String conversationId, String ext) async {
+    try {
+      final senderId = req.headers['x-sender-id'] ?? 'unknown';
+      final senderUsername = req.headers['x-sender-username'] ?? 'Me';
+      final contentType = req.headers['x-content-type'] ?? 'media';
+
+      final connection = await Connection.open(
+        Endpoint(host: 'db', port: 5432, database: 'postgres', username: 'postgres', password: 'GuptikSystemPassword2026'),
+        settings: const ConnectionSettings(sslMode: SslMode.disable),
+      );
+
+      final convResult = await connection.execute(
+        Sql.named("SELECT ct.contact_cloudflare_url FROM tm_conversations c JOIN tm_contacts ct ON c.contact_id = ct.id WHERE c.id = @cid LIMIT 1"),
+        parameters: {'cid': conversationId}
+      );
+      if (convResult.isEmpty) {
+        await connection.close();
+        return Response.notFound('Conversation not found');
+      }
+      
+      var targetUrl = convResult.first[0] as String;
+      if (!targetUrl.startsWith('http')) targetUrl = 'https://$targetUrl';
+
+      final messageId = uuid.v4();
+      final filename = '${messageId}.$ext';
+      final file = File('/app/storage/$filename');
+      final sink = file.openWrite();
+      await sink.addStream(req.read());
+      await sink.flush();
+      await sink.close();
+
+      // 🚀 UPDATED: Uses the unlocked [media] tag!
+      final contentPath = '[media]/internal/media/$filename';
+      await connection.execute(
+        Sql.named("INSERT INTO tm_messages (id, conversation_id, sender_guptik_id, sender_username, content_encrypted, content_type, message_nonce) VALUES (@id, @cid, @sid, @user, @enc, @type, 'local_nonce')"),
+        parameters: {'id': messageId, 'cid': conversationId, 'sid': senderId, 'user': senderUsername, 'enc': contentPath, 'type': contentType}
+      );
+
+      final client = http.Client();
+      final peerReq = http.StreamedRequest('POST', Uri.parse('$targetUrl/trustme/message/stream_receive/$messageId/$ext'));
+      peerReq.headers['x-sender-id'] = senderId;
+      peerReq.headers['x-sender-username'] = senderUsername;
+      peerReq.headers['x-content-type'] = contentType;
+      peerReq.contentLength = await file.length();
+      
+      file.openRead().listen(
+        peerReq.sink.add,
+        onDone: peerReq.sink.close,
+        onError: peerReq.sink.addError
+      );
+      
+      await client.send(peerReq);
+      await connection.close();
+
+      return Response.ok(jsonEncode({'status': 'delivered', 'message_id': messageId, 'path': contentPath}));
+    } catch (e) {
+      return Response.internalServerError(body: 'Stream Send Error: $e');
+    }
+  });
+
+  router.post('/trustme/message/stream_receive/<messageId>/<ext>', (Request req, String messageId, String ext) async {
+    try {
+      final senderId = req.headers['x-sender-id'] ?? 'unknown';
+      final senderUsername = req.headers['x-sender-username'] ?? 'Peer';
+      final contentType = req.headers['x-content-type'] ?? 'media';
+
+      final filename = '${messageId}.$ext';
+      final file = File('/app/storage/$filename');
+      final sink = file.openWrite();
+      await sink.addStream(req.read());
+      await sink.flush();
+      await sink.close();
+
+      final connection = await Connection.open(
+        Endpoint(host: 'db', port: 5432, database: 'postgres', username: 'postgres', password: 'GuptikSystemPassword2026'),
+        settings: const ConnectionSettings(sslMode: SslMode.disable),
+      );
+
+      final contactResult = await connection.execute(
+        Sql.named("SELECT c.id as conversation_id FROM tm_contacts ct JOIN tm_conversations c ON c.contact_id = ct.id WHERE ct.contact_guptik_id = @sid LIMIT 1"),
+        parameters: {'sid': senderId}
+      );
+
+      if (contactResult.isNotEmpty) {
+         final convId = contactResult.first[0];
+         // 🚀 UPDATED: Uses the unlocked [media] tag!
+         final contentPath = '[media]/internal/media/$filename';
+
+         await connection.execute(
+           Sql.named("INSERT INTO tm_messages (id, conversation_id, sender_guptik_id, sender_username, content_encrypted, content_type, message_nonce) VALUES (@id, @cid, @sid, @user, @enc, @type, 'remote_nonce')"),
+           parameters: {'id': messageId, 'cid': convId, 'sid': senderId, 'user': senderUsername, 'enc': contentPath, 'type': contentType}
+         );
+         await connection.execute(
+           Sql.named("UPDATE tm_conversations SET unread_count = unread_count + 1, last_message_at = NOW(), last_message_type = @type WHERE id = @cid"),
+           parameters: {'type': contentType, 'cid': convId}
+         );
+      }
+      await connection.close();
+      return Response.ok('Stream Received successfully');
+    } catch (e) {
+      return Response.internalServerError(body: 'Stream Receive Error: $e');
+    }
+  });
 
   router.get('/internal/conversations', (Request req) async {
     try {
@@ -557,25 +706,27 @@ void main() async {
         Endpoint(host: 'db', port: 5432, database: 'postgres', username: 'postgres', password: 'GuptikSystemPassword2026'),
         settings: const ConnectionSettings(sslMode: SslMode.disable),
       );
-
+// 🚀 UPDATED SQL: Added ct.custom_username to the SELECT statement
       final result = await connection.execute("""
-        SELECT c.id, c.type, ct.contact_username, c.last_message_preview, 
+        SELECT c.id, c.type, ct.contact_username,ct.custom_username, c.last_message_preview, 
                c.last_message_at, c.unread_count, c.is_pinned, c.is_muted
         FROM tm_conversations c
         LEFT JOIN tm_contacts ct ON c.contact_id = ct.id
         ORDER BY c.last_message_at DESC NULLS LAST
       """);
       await connection.close();
-
+      
+// 🚀 UPDATED JSON: Send the custom_username to Flutter and shift the array numbers!
       final conversations = result.map((row) => {
         'id': row[0].toString(),
         'type': row[1].toString(),
         'contact_username': row[2]?.toString(),
-        'last_message_preview': row[3]?.toString(),
-        'last_message_at': row[4]?.toString(),
-        'unread_count': row[5] as int,
-        'is_pinned': row[6] as bool,
-        'is_muted': row[7] as bool,
+        'custom_username': row[3]?.toString(),
+        'last_message_preview': row[4]?.toString(), // FIX: This is row[4], not row[3]!
+        'last_message_at': row[5]?.toString(),
+        'unread_count': row[6] as int,
+        'is_pinned': row[7] as bool,
+        'is_muted': row[8] as bool,
       }).toList();
 
       return Response.ok(jsonEncode({'conversations': conversations}), headers: {'Content-Type': 'application/json'});
@@ -619,7 +770,6 @@ void main() async {
     }
   });
 
-
   router.post('/internal/finalise_connection', (Request req) async {
     final connection = await Connection.open(
       Endpoint(host: 'db', port: 5432, database: 'postgres', username: 'postgres', password: 'GuptikSystemPassword2026'),
@@ -629,10 +779,48 @@ void main() async {
     final payload = await req.readAsString();
     final data = jsonDecode(payload);
     
-    final conversationId = uuid.v4();
-    final contactId = uuid.v4();
     try {
-      // 🚀 INJECTING THE REAL KEYS DIRECTLY INTO THE DATABASE
+      // 🚀 CRITICAL FIX 1: Check if the contact already exists so Postgres doesn't crash!
+      final existingContact = await connection.execute(
+        Sql.named("SELECT id FROM tm_contacts WHERE contact_guptik_id = @gid"),
+        parameters: {'gid': data['counterpart_guptik_id']}
+      );
+
+      if (existingContact.isNotEmpty) {
+        final contactId = existingContact.first[0].toString();
+        // Update their URL and Keys in case they changed since the last connection
+        await connection.execute(
+          Sql.named("""
+            UPDATE tm_contacts 
+            SET contact_cloudflare_url = @url, 
+                contact_identity_pubkey = @ipub, 
+                contact_signed_prekey = @spk, 
+                contact_signed_prekey_id = @spkid 
+            WHERE id = @cid
+          """),
+          parameters: {
+            'cid': contactId,
+            'url': data['counterpart_url'],
+            'ipub': data['contact_identity_pubkey'], 
+            'spk': data['contact_signed_prekey'],    
+            'spkid': data['contact_signed_prekey_id'], 
+          },
+        );
+
+        // Find and return their existing conversation
+        final convResult = await connection.execute(
+          Sql.named("SELECT id FROM tm_conversations WHERE contact_id = @cid LIMIT 1"),
+          parameters: {'cid': contactId}
+        );
+        
+        await connection.close();
+        return Response.ok(jsonEncode({'status': 'success', 'conversation_id': convResult.first[0].toString()}));
+      }
+
+      // If they don't exist, insert them normally!
+      final conversationId = uuid.v4();
+      final contactId = uuid.v4();
+
       await connection.execute(
         Sql.named("""
           INSERT INTO tm_contacts 
@@ -644,9 +832,9 @@ void main() async {
           'gid': data['counterpart_guptik_id'],
           'user': data['counterpart_username'],
           'url': data['counterpart_url'],
-          'ipub': data['contact_identity_pubkey'], // 🚀 Real Identity Key
-          'spk': data['contact_signed_prekey'],    // 🚀 Real PreKey
-          'spkid': data['contact_signed_prekey_id'], // 🚀 Real Key ID
+          'ipub': data['contact_identity_pubkey'], 
+          'spk': data['contact_signed_prekey'],    
+          'spkid': data['contact_signed_prekey_id'], 
         },
       );
 
@@ -666,7 +854,6 @@ void main() async {
       return Response.internalServerError(body: jsonEncode({'error': e.toString()}));
     }
   });
-
 
   router.get('/internal/messages/<conversationId>', (Request req, String conversationId) async {
     try {
