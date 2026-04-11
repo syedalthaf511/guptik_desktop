@@ -887,6 +887,30 @@ void main() async {
     }
   });
 
+
+  // 🚀 THE FIX: This catches the mobile app's signal and resets the unread badge to 0!
+  router.post('/internal/conversation/<conversationId>/read', (Request req, String conversationId) async {
+    try {
+      final connection = await Connection.open(
+        Endpoint(host: 'db', port: 5432, database: 'postgres', username: 'postgres', password: 'GuptikSystemPassword2026'),
+        settings: const ConnectionSettings(sslMode: SslMode.disable),
+      );
+
+      // Reset the badge count for this specific chat!
+      await connection.execute(
+        Sql.named("UPDATE tm_conversations SET unread_count = 0 WHERE id = @cid"),
+        parameters: {'cid': conversationId}
+      );
+      
+      await connection.close();
+      return Response.ok(jsonEncode({'status': 'success', 'message': 'Badge cleared'}));
+    } catch (e) {
+      print('Mark as Read Error: $e');
+      return Response.internalServerError(body: jsonEncode({'error': e.toString()}));
+    }
+  });
+
+
   router.get('/', (Request req) => Response.ok('GUPTIK GATEWAY ONLINE'));
 
   final handler = Pipeline()

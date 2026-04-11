@@ -377,6 +377,17 @@ class TrustMeService {
       return []; // Safety net to prevent UI crashing
     }
   }
+
+  // 🚀 THE FIX: Added the method to tell the local Gateway to clear the unread badge!
+  Future<void> markConversationAsRead(String conversationId) async {
+    try {
+      await http.post(
+        Uri.parse('$_gatewayUrl/internal/conversation/$conversationId/read'),
+      );
+    } catch (e) {
+      print("Could not mark as read: $e");
+    }
+  }
 }
 
 class ConversationSummary {
@@ -386,7 +397,9 @@ class ConversationSummary {
   final String? customUsername;
   final String? lastMessagePreview;
   final DateTime? lastMessageAt;
-  final int unreadCount;
+  
+  int unreadCount; // 🚀 THE FIX: Removed 'final' so we can instantly set it to 0!
+  
   final bool isOnline;
   final bool isPinned;
   final bool isMuted;

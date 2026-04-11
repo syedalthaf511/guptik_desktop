@@ -5,7 +5,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:video_player/video_player.dart'; // 🚀 ADDED: The official Video Player
+import 'package:video_player/video_player.dart'; 
 import '../../services/trustme/trust_me_service.dart';
 
 class SecureChatsScreen extends StatefulWidget {
@@ -37,6 +37,8 @@ class _SecureChatsScreenState extends State<SecureChatsScreen> {
     _messageTimer = Timer.periodic(const Duration(milliseconds: 1500), (timer) {
       if (_selectedChat != null) {
         _loadActiveMessages();
+        // 🚀 Keeps telling the server we are actively reading this chat!
+        TrustMeService.instance.markConversationAsRead(_selectedChat!.id);
       }
       if (timer.tick % 3 == 0) {
         _fetchConversationsLocally();
@@ -73,7 +75,6 @@ class _SecureChatsScreenState extends State<SecureChatsScreen> {
         String type = msg['content_type'] ?? 'text';
         String cleanContent = rawContent;
 
-        // 🚀 LOOKS FOR THE NEW [media] TAG
         if (rawContent.startsWith('[media]')) {
           final lowerContent = rawContent.toLowerCase();
           if (lowerContent.endsWith('.mp4') || lowerContent.endsWith('.mov') || lowerContent.endsWith('.mkv')) {
@@ -85,7 +86,6 @@ class _SecureChatsScreenState extends State<SecureChatsScreen> {
           }
         } 
         else if (rawContent.startsWith('[vault]')) {
-           // Fallback for previous messages sent under the old tag
            type = 'image'; 
         }
 
@@ -240,7 +240,14 @@ class _SecureChatsScreenState extends State<SecureChatsScreen> {
           _selectedChat = chat;
           _activeMessages.clear();
           _previousMessageCount = 0;
+          
+          // 🚀 Instantly hide the cyan circle locally!
+          chat.unreadCount = 0; 
         });
+        
+        // 🚀 Tell the server to clear the badge in the database!
+        TrustMeService.instance.markConversationAsRead(chat.id);
+        
         _loadActiveMessages();
       },
       child: Container(
@@ -429,7 +436,6 @@ class _SecureChatsScreenState extends State<SecureChatsScreen> {
                             ),
                           ),
                           
-                          // 🚀 UPGRADED: Real Image AND Video Players!
                           child: msg['type'] == 'image'
                               ? ClipRRect(
                                   borderRadius: BorderRadius.circular(8),
@@ -442,7 +448,11 @@ class _SecureChatsScreenState extends State<SecureChatsScreen> {
                                   ),
                                 )
                               : msg['type'] == 'video'
-                                  ? _VideoBubble(url: msg['content'].toString().replaceFirst('[media]', 'http://localhost:55000').replaceFirst('[vault]', 'http://localhost:55000'))
+                                  ? _VideoBubble(
+                                      // 🚀 THE FIX: Passed the Key so Flutter doesn't destroy the player!
+                                      key: ValueKey(msg['content'].toString()),
+                                      url: msg['content'].toString().replaceFirst('[media]', 'http://localhost:55000').replaceFirst('[vault]', 'http://localhost:55000')
+                                    )
                                   : Text(
                                       msg['content'],
                                       style: const TextStyle(color: Colors.white, fontSize: 15),
@@ -574,11 +584,12 @@ class _SecureChatsScreenState extends State<SecureChatsScreen> {
   }
 }
 
-
-// 🚀 BRAND NEW: The Custom Video Player Bubble with Error Catching!
+// 🚀 The Custom Video Player Bubble with Error Catching AND Key Support!
 class _VideoBubble extends StatefulWidget {
   final String url;
-  const _VideoBubble({required this.url});
+  
+  // 🚀 THE FIX: Added super.key!
+  const _VideoBubble({super.key, required this.url});
 
   @override
   State<_VideoBubble> createState() => _VideoBubbleState();
@@ -600,7 +611,6 @@ class _VideoBubbleState extends State<_VideoBubble> {
       debugPrint("🎥 Attempting to load video from: ${widget.url}");
       _controller = VideoPlayerController.networkUrl(Uri.parse(widget.url));
       
-      // 🚀 THE FIX: We added an 'await' with a try/catch block so it stops spinning if it fails!
       await _controller!.initialize();
       
       if (mounted) {
@@ -626,7 +636,6 @@ class _VideoBubbleState extends State<_VideoBubble> {
 
   @override
   Widget build(BuildContext context) {
-    // 🚨 IF IT FAILS: Show a red box with the exact error message!
     if (_errorMessage.isNotEmpty) {
       return Container(
         width: 250,
@@ -656,7 +665,6 @@ class _VideoBubbleState extends State<_VideoBubble> {
       );
     }
 
-    // ⏳ STILL LOADING: Show the spinner
     if (!_isInitialized || _controller == null) {
       return const SizedBox(
         height: 150, width: 250,
@@ -673,7 +681,6 @@ class _VideoBubbleState extends State<_VideoBubble> {
       );
     }
 
-    // ✅ SUCCESS: Play the Video!
     return SizedBox(
       width: 250,
       child: Column(
