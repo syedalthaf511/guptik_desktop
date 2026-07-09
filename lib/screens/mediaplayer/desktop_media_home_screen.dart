@@ -5,6 +5,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:http/http.dart' as http; // 🚀 Added for local history fetching
 import '../../models/mediaplayer/player_video_model.dart';
 import '../../services/mediaplayer/player_api_service.dart';
+import '../../services/mediaplayer/watch_history_local_store.dart';
 import '../../services/external/docker_service.dart';
 import '../../widgets/mediaplayer/player_video_card.dart';
 import 'desktop_upload__screen.dart';
@@ -103,22 +104,57 @@ class _DesktopMediaHomeScreenState extends State<DesktopMediaHomeScreen> {
         }
       }
 
-      if (data != null && mounted) {
-        setState(() {
-          // Use the URL that actually served the data so playback/thumbnails resolve correctly.
-          _historyVideos = data!
-              .map((json) => PlayerVideo.fromJson(json, usedUrl!))
-              .toList();
+      // 🚀 MERGE: The backend de-duplicates history by video_id (keeping only
+      // the latest watch_timestamp), so a video watched yesterday and again
+      // today would "move" out of Yesterday. We merge in our own append-only
+      // local log so each watch event is preserved on its own day. The local
+      // log is the source of truth for *when* something was watched; the
+      // backend is used to enrich metadata / cover sessions before this feature
+      // existed.
+      final localEntries = await WatchHistoryLocalStore.getAll();
 
-          // 🚀 Stash each video's watch_timestamp so we can group by date and
-          // support date-based search. The backend already de-duplicates, so
-          // each video_id appears at most once here.
-          _watchTimestamps.clear();
-          for (final json in data) {
-            final vid = (json['video_id'] ?? json['id'] ?? '').toString();
-            final rawTs = json['watch_timestamp']?.toString();
-            if (vid.isNotEmpty && rawTs != null) {
-              _watchTimestamps[vid] = DateTime.tryParse(rawTs) ?? DateTime.now();
+      if (mounted) {
+        setState(() {
+          _historyVideos = [];
+          _watchTimes.clear();
+
+          // Track (videoId|dayKey) pairs already represented so we never show
+          // the same video twice on the same day. The local log is the source
+          // of truth for *when* a video was watched.
+          final seen = <String>{};
+
+          // 1. Local append-only log first. Each entry keeps its own per-event
+          // timestamp, so a re-watched video correctly appears on every day it
+          // was watched (e.g. Yesterday AND Today).
+          for (final entry in localEntries) {
+            final vid = entry.video.videoId;
+            if (vid.isEmpty) continue;
+            final ts = entry.watchedAt;
+            final dayKey = '${ts.year}-${ts.month}-${ts.day}';
+            final key = '$vid|$dayKey';
+            if (seen.contains(key)) continue;
+            seen.add(key);
+            _historyVideos.add(entry.video);
+            _watchTimes.add(ts);
+          }
+
+          // 2. Backend entries (if reachable). The backend de-duplicates by
+          // video_id and only keeps the LATEST watch_timestamp, so a video
+          // watched yesterday and again today would otherwise "move" out of
+          // Yesterday. We still merge these in to cover sessions before this
+          // local log existed, but skip any (videoId, day) already represented
+          // by the local log to avoid duplicates.
+          if (data != null) {
+            for (final json in data) {
+              final vid = (json['video_id'] ?? json['id'] ?? '').toString();
+              final rawTs = json['watch_timestamp']?.toString();
+              final ts = DateTime.tryParse(rawTs ?? '') ?? DateTime.now();
+              final dayKey = '${ts.year}-${ts.month}-${ts.day}';
+              final key = '$vid|$dayKey';
+              if (vid.isEmpty || seen.contains(key)) continue;
+              seen.add(key);
+              _historyVideos.add(PlayerVideo.fromJson(json, usedUrl!));
+              _watchTimes.add(ts);
             }
           }
 
@@ -171,18 +207,23 @@ class _DesktopMediaHomeScreenState extends State<DesktopMediaHomeScreen> {
     return '${watchDay.day} ${months[watchDay.month - 1]} ${watchDay.year}';
   }
 
-  // Parallel map of videoId -> watch timestamp (populated when history loads).
-  final Map<String, DateTime> _watchTimestamps = {};
+  // 🚀 Parallel list of watch timestamps, aligned 1:1 with [_historyVideos].
+  // A single video can legitimately appear on multiple days (watched yesterday
+  // and again today), so we store a timestamp PER ENTRY rather than per
+  // videoId. This is what lets a re-watched video stay in both days.
+  final List<DateTime> _watchTimes = [];
 
-  // Groups the (already de-duplicated) history videos by their watch day and
-  // returns an ordered list of (label, videos) pairs, newest day first.
+  // Groups the history videos by their watch day and returns an ordered list of
+  // (label, videos) pairs, newest day first. Because each entry carries its
+  // own timestamp, a video watched on several days shows up under each of them.
   List<Map<String, dynamic>> get _groupedHistory {
     final Map<String, List<PlayerVideo>> buckets = {};
     final Map<String, DateTime> bucketDay = {};
 
-    for (final v in _historyVideos) {
-      final ts = _watchTimestamps[v.videoId];
-      if (ts == null) continue;
+    for (var i = 0; i < _historyVideos.length; i++) {
+      final v = _historyVideos[i];
+      if (i >= _watchTimes.length) continue;
+      final ts = _watchTimes[i];
       final dayKey = '${ts.year}-${ts.month}-${ts.day}';
       buckets.putIfAbsent(dayKey, () => []).add(v);
       bucketDay[dayKey] = ts;
@@ -201,12 +242,14 @@ class _DesktopMediaHomeScreenState extends State<DesktopMediaHomeScreen> {
   List<PlayerVideo> get _filteredHistory {
     if (_historyDateFilter == null) return _historyVideos;
     final filterDay = DateTime(_historyDateFilter!.year, _historyDateFilter!.month, _historyDateFilter!.day);
-    return _historyVideos.where((v) {
-      final ts = _watchTimestamps[v.videoId];
-      if (ts == null) return false;
+    final result = <PlayerVideo>[];
+    for (var i = 0; i < _historyVideos.length; i++) {
+      if (i >= _watchTimes.length) continue;
+      final ts = _watchTimes[i];
       final day = DateTime(ts.year, ts.month, ts.day);
-      return day.isAtSameMomentAs(filterDay);
-    }).toList();
+      if (day.isAtSameMomentAs(filterDay)) result.add(_historyVideos[i]);
+    }
+    return result;
   }
 
   // 🚀 Opens a date picker so the user can search for videos watched on a

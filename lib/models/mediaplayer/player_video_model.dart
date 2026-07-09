@@ -100,7 +100,7 @@ class PlayerVideo {
       likeCount: json['like_count_local'] ?? json['like_count'] ?? 0,
       commentCount: json['comment_count_local'] ?? json['comment_count'] ?? 0,
       createdAt: json['published_at'] ?? json['created_at'] ?? json['upload_timestamp'] ?? '',
-      creatorUrl: gateway,
+      creatorUrl: json['creator_url']?.toString() ?? gateway,
       channelName: json['channel_name'] ?? 'Unknown Creator', 
       isReel: json['is_reel'] ?? false,
       visibility: json['visibility'] ?? 'public',
@@ -123,4 +123,40 @@ class PlayerVideo {
       thumbnailUrl: json['thumbnail_url']?.toString(),
     );
   }
+
+  /// Serializes the video so it can be persisted in the local append-only
+  /// watch-history log (see WatchHistoryLocalStore). We store enough metadata
+  /// to render a history card even when the backend is unreachable.
+  Map<String, dynamic> toJson() => {
+        'video_id': videoId,
+        'creator_uid': creatorUid,
+        'title': title,
+        'description': description,
+        'file_path': filePath,
+        'view_count': viewCount,
+        'like_count': likeCount,
+        'comment_count': commentCount,
+        'created_at': createdAt,
+        'creator_url': creatorUrl,
+        'channel_name': channelName,
+        'stickers': stickers,
+        'is_reel': isReel,
+        'visibility': visibility,
+        'category': category,
+        'tags': tags,
+        'is_monetized': isMonetized,
+        'save_count': saveCount,
+        'repost_count': repostCount,
+        'share_count': shareCount,
+        'reaction_heart_count': reactionHeartCount,
+        'reaction_fire_count': reactionFireCount,
+        'reaction_thumbs_up_count': reactionThumbsUpCount,
+        'reaction_clap_count': reactionClapCount,
+        'reaction_laugh_count': reactionLaughCount,
+        'reaction_surprised_count': reactionSurprisedCount,
+        'reaction_sad_count': reactionSadCount,
+        'average_watch_percentage': averageWatchPercentage,
+        'unique_viewers': uniqueViewers,
+        'thumbnail_url': thumbnailUrl,
+      };
 }

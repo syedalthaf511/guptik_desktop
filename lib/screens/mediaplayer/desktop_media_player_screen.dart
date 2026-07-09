@@ -11,6 +11,7 @@ import '../../models/mediaplayer/player_video_model.dart';
 import '../../models/mediaplayer/player_comment_model.dart';
 import '../../services/mediaplayer/player_api_service.dart';
 import '../../services/mediaplayer/player_comment_service.dart';
+import '../../services/mediaplayer/watch_history_local_store.dart';
 import '../../services/external/docker_service.dart';
 
 import '../../widgets/mediaplayer/player_reaction_bar.dart';
@@ -130,6 +131,11 @@ class _DesktopMediaPlayerScreenState extends State<DesktopMediaPlayerScreen> {
       percent, 
       'desktop_session_${DateTime.now().millisecondsSinceEpoch}'
     );
+
+    // 🚀 Append-only local watch log: ensures a video watched yesterday and
+    // again today appears in BOTH days (the backend de-dupes by video_id and
+    // would otherwise drop it from the earlier day).
+    WatchHistoryLocalStore.recordWatch(widget.video, DateTime.now());
 
     player.dispose();
     super.dispose();
