@@ -2,8 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../services/external/docker_service.dart';
 import '../../services/external/postgres_service.dart';
-import '../dashboard/dashboard_screen.dart';
-import 'login_screen.dart';
+import '../home_control/home_control_screen.dart';
+import 'login_signup_screen.dart';
 import '../../services/supabase_service.dart';
 
 class BootScreen extends StatefulWidget {
@@ -59,11 +59,11 @@ class _BootScreenState extends State<BootScreen> {
 
       if (!connected) throw Exception("Could not reach local database.");
 
-      // 4. Go to Dashboard
+      // 4. Go to Home Control (which now has the Dashboard as first tab)
       if (mounted) {
         Navigator.pushReplacement(
           context,
-          MaterialPageRoute(builder: (_) => const DashboardScreen()),
+          MaterialPageRoute(builder: (_) => const HomeControlScreen()),
         );
       }
     } catch (e) {
@@ -72,7 +72,7 @@ class _BootScreenState extends State<BootScreen> {
       if (mounted) {
         Navigator.pushReplacement(
           context,
-          MaterialPageRoute(builder: (_) => const LoginScreen()),
+MaterialPageRoute(builder: (_) => const LoginSignupScreen()),
         );
       }
     }

@@ -58,12 +58,17 @@ class _WindowHeaderState extends State<WindowHeader> with WindowListener {
                 padding: const EdgeInsets.symmetric(horizontal: 16),
                 child: Row(
                   children: [
-                    Container(
-                      width: 10,
-                      height: 10,
-                      decoration: BoxDecoration(
-                        color: Colors.cyanAccent,
-                        borderRadius: BorderRadius.circular(2),
+                    Image.asset(
+                      'lib/assets/logonobg.png',
+                      width: 22,
+                      height: 22,
+                      errorBuilder: (_, _, _) => Container(
+                        width: 22,
+                        height: 22,
+                        decoration: BoxDecoration(
+                          color: Colors.cyanAccent,
+                          borderRadius: BorderRadius.circular(4),
+                        ),
                       ),
                     ),
                     const SizedBox(width: 8),

@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../services/external/docker_service.dart';
-import '../auth/login_screen.dart'; // Ensure this points to your new LoginScreen
+import '../auth/login_signup_screen.dart'; // Ensure this points to your new LoginScreen
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -64,7 +64,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       if (mounted) {
         Navigator.pushAndRemoveUntil(
           context,
-          MaterialPageRoute(builder: (_) => const LoginScreen()),
+MaterialPageRoute(builder: (_) => const LoginSignupScreen()),
           (route) => false,
         );
       }

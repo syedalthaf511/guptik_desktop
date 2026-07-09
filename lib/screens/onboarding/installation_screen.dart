@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../services/external/docker_service.dart';
-import '../dashboard/dashboard_screen.dart';
+import '../home_control/home_control_screen.dart';
 import '../../services/external/postgres_service.dart';
 import 'dart:async';
 import '../../services/external/ollama_service.dart';
@@ -308,7 +308,7 @@ class _InstallationScreenState extends State<InstallationScreen> {
                         onPressed: () => Navigator.pushReplacement(
                           context,
                           MaterialPageRoute(
-                            builder: (_) => const DashboardScreen(),
+                            builder: (_) => const HomeControlScreen(),
                           ),
                         ),
                         style: ElevatedButton.styleFrom(

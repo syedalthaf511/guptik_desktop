@@ -1,0 +1,550 @@
+admin side-
+
+-- WARNING: This schema is for context only and is not meant to be run.
+-- Table order and constraints may not be valid for execution.
+
+CREATE TABLE public.account_alerts (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL,
+  alert_type character varying,
+  severity character varying CHECK (severity::text = ANY (ARRAY['low'::character varying::text, 'medium'::character varying::text, 'high'::character varying::text, 'critical'::character varying::text])),
+  message text,
+  is_resolved boolean DEFAULT false,
+  raw_data jsonb,
+  created_at timestamp with time zone DEFAULT now(),
+  resolved_at timestamp with time zone,
+  CONSTRAINT account_alerts_pkey PRIMARY KEY (id),
+  CONSTRAINT account_alerts_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id)
+);
+CREATE TABLE public.ai_agents (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL,
+  name character varying NOT NULL,
+  system_prompt text,
+  model character varying DEFAULT 'gpt-3.5-turbo'::character varying,
+  is_active boolean DEFAULT false,
+  auto_reply_enabled boolean DEFAULT false,
+  created_at timestamp with time zone DEFAULT now(),
+  updated_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT ai_agents_pkey PRIMARY KEY (id),
+  CONSTRAINT ai_agents_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id)
+);
+CREATE TABLE public.business_profiles (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL UNIQUE,
+  category text DEFAULT 'Other'::text,
+  business_type text DEFAULT 'Other'::text,
+  created_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT business_profiles_pkey PRIMARY KEY (id),
+  CONSTRAINT business_profiles_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id)
+);
+CREATE TABLE public.desktop_devices (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL,
+  device_id text NOT NULL UNIQUE,
+  device_name text,
+  device_model text,
+  vault_path text,
+  services_path text,
+  is_verified boolean DEFAULT false,
+  installation_status text DEFAULT 'pending'::text,
+  last_active_at timestamp with time zone DEFAULT now(),
+  created_at timestamp with time zone DEFAULT now(),
+  cf_tunnel_id text,
+  cf_tunnel_token text,
+  public_url text,
+  refresh_token text,
+  status text DEFAULT 'offline'::text,
+  CONSTRAINT desktop_devices_pkey PRIMARY KEY (id),
+  CONSTRAINT desktop_devices_user FOREIGN KEY (user_id) REFERENCES auth.users(id)
+);
+CREATE TABLE public.fb_auto_comment_posts (
+  id bigint GENERATED ALWAYS AS IDENTITY NOT NULL,
+  user_id uuid NOT NULL,
+  post_id text UNIQUE,
+  auto_reply json DEFAULT '{"keywords":"word1,word2,wordthree", "respond":" follow the given link to reach real success https://www.instagram.com/projectnarada "}'::json,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  ai_agent_id uuid,
+  ai_agent_prompt text DEFAULT 'you are helping me reply my instagram comments'::text,
+  comment_ai_response boolean DEFAULT false,
+  comment_respond text DEFAULT ''::text,
+  all_comments boolean NOT NULL DEFAULT false,
+  CONSTRAINT fb_auto_comment_posts_pkey PRIMARY KEY (id),
+  CONSTRAINT fb_auto_comment_posts_duplicate_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id),
+  CONSTRAINT fb_auto_comment_posts_duplicate_ai_agent_id_fkey FOREIGN KEY (ai_agent_id) REFERENCES public.ai_agents(id)
+);
+CREATE TABLE public.fb_comments (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  post_id uuid NOT NULL,
+  user_id uuid NOT NULL,
+  parent_comment_id uuid,
+  content text NOT NULL,
+  media_url text,
+  likes_count integer DEFAULT 0,
+  replies_count integer DEFAULT 0,
+  is_hidden boolean DEFAULT false,
+  is_pinned boolean DEFAULT false,
+  created_at timestamp with time zone DEFAULT now(),
+  updated_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT fb_comments_pkey PRIMARY KEY (id),
+  CONSTRAINT fb_comments_parent_comment_id_fkey FOREIGN KEY (parent_comment_id) REFERENCES public.fb_comments(id)
+);
+CREATE TABLE public.fb_comments_responces (
+  id bigint GENERATED ALWAYS AS IDENTITY NOT NULL,
+  post_id text NOT NULL,
+  sender_id text NOT NULL,
+  sender_name text,
+  direction text NOT NULL,
+  context text NOT NULL,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  comment_id text,
+  CONSTRAINT fb_comments_responces_pkey PRIMARY KEY (id),
+  CONSTRAINT fb_comments_responces_duplicate_post_id_fkey FOREIGN KEY (post_id) REFERENCES public.ig_auto_comment_posts(post_id)
+);
+CREATE TABLE public.fb_conversations (
+  id text NOT NULL,
+  user_id uuid NOT NULL,
+  sender_id text NOT NULL,
+  sender_username text,
+  sender_avatar text,
+  last_message text,
+  last_message_time text,
+  unread_count integer DEFAULT 0,
+  updated_at text NOT NULL,
+  created_at timestamp with time zone DEFAULT now(),
+  ai_agent_id text,
+  CONSTRAINT fb_conversations_pkey PRIMARY KEY (id)
+);
+CREATE TABLE public.fb_messages (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  conversation_id text NOT NULL,
+  message_id text NOT NULL UNIQUE,
+  content text NOT NULL,
+  message_type character varying NOT NULL DEFAULT 'text'::character varying CHECK (message_type::text = ANY (ARRAY['text'::character varying, 'image'::character varying, 'video'::character varying, 'audio'::character varying, 'document'::character varying, 'location'::character varying, 'contacts'::character varying, 'sticker'::character varying, 'reaction'::character varying]::text[])),
+  direction character varying NOT NULL CHECK (direction::text = ANY (ARRAY['incoming'::character varying, 'outgoing'::character varying, 'ai_outgoing'::character varying]::text[])),
+  status character varying,
+  timestamp text NOT NULL,
+  status_timestamp text,
+  media_info jsonb,
+  raw_data jsonb,
+  created_at text NOT NULL,
+  updated_at text NOT NULL,
+  CONSTRAINT fb_messages_pkey PRIMARY KEY (id),
+  CONSTRAINT fb_messages_conversation_id_fkey FOREIGN KEY (conversation_id) REFERENCES public.fb_conversations(id)
+);
+CREATE TABLE public.hc_boards (
+  id text NOT NULL DEFAULT gen_random_uuid(),
+  home_id text,
+  room_id text,
+  owner_id uuid,
+  location text,
+  mac_address text,
+  is_claimed boolean NOT NULL DEFAULT false,
+  status text NOT NULL DEFAULT 'offline'::text CHECK (status = ANY (ARRAY['online'::text, 'offline'::text, 'maintenance'::text])),
+  firmware_version text,
+  last_online timestamp with time zone,
+  connection_info jsonb DEFAULT '{}'::jsonb,
+  metadata jsonb DEFAULT '{}'::jsonb,
+  is_active boolean NOT NULL DEFAULT true,
+  created_at timestamp with time zone DEFAULT now(),
+  updated_at timestamp with time zone DEFAULT now(),
+  name text NOT NULL DEFAULT 'Smart Switch'::text,
+  CONSTRAINT hc_boards_pkey PRIMARY KEY (id),
+  CONSTRAINT hc_boards_home_id_fkey FOREIGN KEY (home_id) REFERENCES public.hc_homes(id),
+  CONSTRAINT hc_boards_room_id_fkey FOREIGN KEY (room_id) REFERENCES public.hc_rooms(id),
+  CONSTRAINT hc_boards_owner_id_fkey FOREIGN KEY (owner_id) REFERENCES auth.users(id)
+);
+CREATE TABLE public.hc_home_shares (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  home_id text NOT NULL,
+  owner_id uuid NOT NULL,
+  shared_with_id uuid,
+  referral_code text NOT NULL UNIQUE,
+  can_control boolean DEFAULT true,
+  is_active boolean DEFAULT true,
+  max_uses integer DEFAULT 1,
+  current_uses integer DEFAULT 0,
+  expires_at timestamp with time zone NOT NULL,
+  created_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT hc_home_shares_pkey PRIMARY KEY (id),
+  CONSTRAINT hc_home_shares_home_id_fkey FOREIGN KEY (home_id) REFERENCES public.hc_homes(id),
+  CONSTRAINT hc_home_shares_owner_id_fkey FOREIGN KEY (owner_id) REFERENCES auth.users(id),
+  CONSTRAINT hc_home_shares_shared_with_id_fkey FOREIGN KEY (shared_with_id) REFERENCES auth.users(id)
+);
+CREATE TABLE public.hc_homes (
+  id text NOT NULL DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL,
+  name text NOT NULL,
+  description text,
+  wallpaper_path text,
+  is_active boolean NOT NULL DEFAULT true,
+  created_at timestamp with time zone DEFAULT now(),
+  updated_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT hc_homes_pkey PRIMARY KEY (id),
+  CONSTRAINT hc_homes_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id)
+);
+CREATE TABLE public.hc_rooms (
+  id text NOT NULL DEFAULT gen_random_uuid(),
+  home_id text NOT NULL,
+  name text NOT NULL,
+  description text,
+  icon text DEFAULT 'meeting_room'::text,
+  display_order integer DEFAULT 0,
+  is_active boolean NOT NULL DEFAULT true,
+  created_at timestamp with time zone DEFAULT now(),
+  updated_at timestamp with time zone DEFAULT now(),
+  metadata jsonb DEFAULT '{}'::jsonb,
+  CONSTRAINT hc_rooms_pkey PRIMARY KEY (id),
+  CONSTRAINT hc_rooms_home_id_fkey FOREIGN KEY (home_id) REFERENCES public.hc_homes(id)
+);
+CREATE TABLE public.hc_switches (
+  id text NOT NULL DEFAULT gen_random_uuid(),
+  board_id text NOT NULL,
+  name text NOT NULL,
+  type text NOT NULL DEFAULT 'light'::text CHECK (type = ANY (ARRAY['light'::text, 'fan'::text, 'ac'::text, 'heater'::text, 'tv'::text, 'speaker'::text, 'plug'::text, 'motor'::text, 'pump'::text, 'door'::text, 'window'::text, 'curtain'::text, 'other'::text])),
+  position integer NOT NULL DEFAULT 0,
+  state boolean NOT NULL DEFAULT false,
+  is_enabled boolean NOT NULL DEFAULT true,
+  last_state_change timestamp with time zone DEFAULT now(),
+  power_rating numeric,
+  location text DEFAULT ''::text,
+  alexa_enabled boolean DEFAULT true,
+  metadata jsonb DEFAULT '{}'::jsonb,
+  created_at timestamp with time zone DEFAULT now(),
+  updated_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT hc_switches_pkey PRIMARY KEY (id),
+  CONSTRAINT hc_switches_board_id_fkey FOREIGN KEY (board_id) REFERENCES public.hc_boards(id)
+);
+CREATE TABLE public.hc_timers (
+  id text NOT NULL DEFAULT gen_random_uuid(),
+  switch_id text NOT NULL,
+  user_id uuid NOT NULL,
+  name text,
+  time text NOT NULL,
+  action boolean NOT NULL DEFAULT true,
+  is_enabled boolean NOT NULL DEFAULT true,
+  created_at timestamp with time zone DEFAULT now(),
+  updated_at timestamp with time zone DEFAULT now(),
+  days_of_week ARRAY,
+  is_active boolean DEFAULT true,
+  type text DEFAULT 'scheduled'::text,
+  scheduled_date timestamp with time zone,
+  CONSTRAINT hc_timers_pkey PRIMARY KEY (id),
+  CONSTRAINT hc_timers_switch_id_fkey FOREIGN KEY (switch_id) REFERENCES public.hc_switches(id),
+  CONSTRAINT hc_timers_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id)
+);
+CREATE TABLE public.ig_auto_comment_posts (
+  id bigint GENERATED ALWAYS AS IDENTITY NOT NULL,
+  user_id uuid NOT NULL,
+  post_id text UNIQUE,
+  auto_reply json DEFAULT '{"keywords":"word1,word2,wordthree", "respond":" follow the given link to reach real success https://www.instagram.com/projectnarada "}'::json,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  ai_agent_id uuid,
+  ai_agent_prompt text DEFAULT 'you are helping me reply my instagram comments'::text,
+  comment_ai_response boolean DEFAULT false,
+  comment_respond text DEFAULT ''::text,
+  all_comments boolean NOT NULL DEFAULT false,
+  CONSTRAINT ig_auto_comment_posts_pkey PRIMARY KEY (id),
+  CONSTRAINT ig_posts_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id),
+  CONSTRAINT ig_posts_ai_agent_id_fkey FOREIGN KEY (ai_agent_id) REFERENCES public.ai_agents(id)
+);
+CREATE TABLE public.ig_comments_responces (
+  id bigint GENERATED ALWAYS AS IDENTITY NOT NULL,
+  post_id text NOT NULL,
+  sender_id text NOT NULL,
+  sender_name text,
+  direction text NOT NULL,
+  context text NOT NULL,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  comment_id text,
+  CONSTRAINT ig_comments_responces_pkey PRIMARY KEY (id),
+  CONSTRAINT ig_comments_post_id_fkey FOREIGN KEY (post_id) REFERENCES public.ig_auto_comment_posts(post_id)
+);
+CREATE TABLE public.ig_conversations (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL,
+  ai_agent_id uuid,
+  contact_notes text,
+  last_message text,
+  last_message_time text NOT NULL,
+  is_unread boolean DEFAULT true,
+  is_archived boolean DEFAULT false,
+  created_at text NOT NULL DEFAULT (now() AT TIME ZONE 'ist'::text),
+  updated_at timestamp with time zone DEFAULT (now() AT TIME ZONE 'utc'::text),
+  sender_id text,
+  CONSTRAINT ig_conversations_pkey PRIMARY KEY (id),
+  CONSTRAINT ig_conversations_ai_agent_id_fkey FOREIGN KEY (ai_agent_id) REFERENCES public.ai_agents(id),
+  CONSTRAINT ig_conversations_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id)
+);
+CREATE TABLE public.ig_messages (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  conversation_id uuid NOT NULL,
+  message_id character varying NOT NULL UNIQUE,
+  content text NOT NULL,
+  message_type character varying NOT NULL DEFAULT 'text'::character varying CHECK (message_type::text = ANY (ARRAY['text'::character varying::text, 'image'::character varying::text, 'video'::character varying::text, 'audio'::character varying::text, 'document'::character varying::text, 'location'::character varying::text, 'contacts'::character varying::text, 'sticker'::character varying::text, 'reaction'::character varying::text])),
+  direction character varying NOT NULL CHECK (direction::text = ANY (ARRAY['incoming'::character varying::text, 'outgoing'::character varying::text, 'ai_outgoing'::character varying::text])),
+  status character varying,
+  timestamp text NOT NULL,
+  status_timestamp text,
+  media_info jsonb,
+  raw_data jsonb,
+  created_at text NOT NULL,
+  updated_at text NOT NULL,
+  CONSTRAINT ig_messages_pkey PRIMARY KEY (id),
+  CONSTRAINT ig_messages_conversation_id_fkey FOREIGN KEY (conversation_id) REFERENCES public.ig_conversations(id)
+);
+CREATE TABLE public.message_analytics (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL,
+  date date NOT NULL,
+  incoming_count integer DEFAULT 0,
+  outgoing_count integer DEFAULT 0,
+  ai_outgoing_count integer DEFAULT 0,
+  template_used_count integer DEFAULT 0,
+  avg_response_time_seconds numeric,
+  created_at timestamp with time zone DEFAULT now(),
+  updated_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT message_analytics_pkey PRIMARY KEY (id),
+  CONSTRAINT message_analytics_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id)
+);
+CREATE TABLE public.message_templates (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL,
+  name character varying NOT NULL CHECK (length(TRIM(BOTH FROM name)) > 0),
+  category character varying NOT NULL DEFAULT 'General'::character varying CHECK (category::text = ANY (ARRAY['Marketing'::character varying::text, 'Utility'::character varying::text, 'Authentication'::character varying::text, 'General'::character varying::text, 'Greeting'::character varying::text, 'Business'::character varying::text, 'Support'::character varying::text, 'Promotion'::character varying::text, 'Reminder'::character varying::text])),
+  language character varying NOT NULL DEFAULT 'English'::character varying,
+  type character varying NOT NULL DEFAULT 'Custom'::character varying,
+  status character varying NOT NULL DEFAULT 'DRAFT'::character varying CHECK (status::text = ANY (ARRAY['DRAFT'::character varying::text, 'PENDING'::character varying::text, 'APPROVED'::character varying::text, 'REJECTED'::character varying::text])),
+  header_type character varying DEFAULT 'None'::character varying CHECK (header_type::text = ANY (ARRAY['None'::character varying::text, 'Text'::character varying::text, 'Image'::character varying::text, 'Video'::character varying::text, 'Document'::character varying::text])),
+  header text,
+  message text NOT NULL CHECK (length(TRIM(BOTH FROM message)) > 0),
+  footer text,
+  usage_count integer DEFAULT 0,
+  is_favorite boolean DEFAULT false,
+  last_used_at timestamp with time zone,
+  created_at timestamp with time zone DEFAULT now(),
+  updated_at timestamp with time zone DEFAULT now(),
+  buttons jsonb,
+  CONSTRAINT message_templates_pkey PRIMARY KEY (id),
+  CONSTRAINT message_templates_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id)
+);
+CREATE TABLE public.posts (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL,
+  content text,
+  platform text CHECK (platform = ANY (ARRAY['facebook'::text, 'instagram'::text, 'both'::text])),
+  facebook_post_id text,
+  facebook_permalink text,
+  facebook_created_time timestamp without time zone,
+  instagram_media_id text,
+  instagram_permalink text,
+  instagram_created_time timestamp without time zone,
+  media_type text CHECK (media_type = ANY (ARRAY['image'::text, 'video'::text, 'carousel'::text, 'reel'::text, 'story'::text, 'text'::text])),
+  status text DEFAULT 'published'::text,
+  likes_count integer DEFAULT 0,
+  comments_count integer DEFAULT 0,
+  shares_count integer DEFAULT 0,
+  created_at timestamp with time zone DEFAULT now(),
+  updated_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT posts_pkey PRIMARY KEY (id),
+  CONSTRAINT posts_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id)
+);
+CREATE TABLE public.profiles (
+  id uuid NOT NULL,
+  email text NOT NULL,
+  full_name text,
+  avatar_url text,
+  created_at timestamp with time zone DEFAULT now(),
+  updated_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT profiles_pkey PRIMARY KEY (id),
+  CONSTRAINT profiles_id_fkey FOREIGN KEY (id) REFERENCES auth.users(id)
+);
+CREATE TABLE public.scheduled_messages (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL,
+  conversation_id uuid NOT NULL,
+  template_id uuid,
+  message_text text,
+  scheduled_for timestamp with time zone NOT NULL,
+  sent_at timestamp with time zone,
+  status character varying NOT NULL DEFAULT 'pending'::character varying CHECK (status::text = ANY (ARRAY['pending'::text, 'sent'::text, 'failed'::text, 'cancelled'::text])),
+  retry_count integer DEFAULT 0,
+  error_message text,
+  created_at timestamp with time zone DEFAULT now(),
+  updated_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT scheduled_messages_pkey PRIMARY KEY (id),
+  CONSTRAINT scheduled_messages_template_id_fkey FOREIGN KEY (template_id) REFERENCES public.message_templates(id),
+  CONSTRAINT scheduled_messages_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id),
+  CONSTRAINT scheduled_messages_conversation_id_fkey FOREIGN KEY (conversation_id) REFERENCES public.wa_conversations(id)
+);
+CREATE TABLE public.trust_me_secure_invites (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  creator_id uuid NOT NULL,
+  invite_code text NOT NULL UNIQUE,
+  created_at timestamp with time zone DEFAULT now(),
+  connected_with uuid,
+  joiner_username text,
+  joiner_cloudflare_url text,
+  creator_username text,
+  creator_signed_prekey_id integer,
+  joiner_signed_prekey_id integer,
+  updated_at timestamp with time zone,
+  CONSTRAINT trust_me_secure_invites_pkey PRIMARY KEY (id),
+  CONSTRAINT trust_me_secure_invites_connected_with_fkey FOREIGN KEY (connected_with) REFERENCES auth.users(id),
+  CONSTRAINT trust_me_invites_creator_id_fkey FOREIGN KEY (creator_id) REFERENCES auth.users(id)
+);
+CREATE TABLE public.trust_me_sessions (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  user_a_id uuid NOT NULL,
+  user_b_id uuid NOT NULL,
+  encryption_key_hash text,
+  status text DEFAULT 'active'::text CHECK (status = ANY (ARRAY['pending'::text, 'active'::text, 'terminated'::text])),
+  last_active_at timestamp with time zone DEFAULT now(),
+  created_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT trust_me_sessions_pkey PRIMARY KEY (id),
+  CONSTRAINT trust_me_sessions_user_a_fkey FOREIGN KEY (user_a_id) REFERENCES auth.users(id),
+  CONSTRAINT trust_me_sessions_user_b_fkey FOREIGN KEY (user_b_id) REFERENCES auth.users(id)
+);
+CREATE TABLE public.trustme_connections (
+  id bigint GENERATED ALWAYS AS IDENTITY NOT NULL,
+  sender_id uuid,
+  reciver_id uuid,
+  updated_at timestamp with time zone DEFAULT now(),
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  approach text DEFAULT 'unknown'::text,
+  CONSTRAINT trustme_connections_pkey PRIMARY KEY (id),
+  CONSTRAINT trustme_connections_reciver_id_fkey FOREIGN KEY (reciver_id) REFERENCES auth.users(id),
+  CONSTRAINT trustme_connections_sender_id_fkey FOREIGN KEY (sender_id) REFERENCES auth.users(id)
+);
+CREATE TABLE public.user_api_settings (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL UNIQUE,
+  whatsapp_access_token text,
+  meta_wa_phone_number_id text,
+  meta_business_account_id text,
+  mobile_number text,
+  created_at timestamp with time zone DEFAULT now(),
+  updated_at timestamp with time zone DEFAULT now(),
+  hc_role text DEFAULT 'user'::text,
+  instagram_access_token text,
+  instagram_account_id text,
+  facebook_user_access_token text,
+  facebook_account_id text,
+  facebook_page_access_token text,
+  meta_app_id text,
+  facebook_page_name text,
+  instagram_app_secret text,
+  instagram_app_id text,
+  meta_business_name text,
+  CONSTRAINT user_api_settings_pkey PRIMARY KEY (id),
+  CONSTRAINT user_api_settings_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id)
+);
+CREATE TABLE public.user_profiles (
+  id uuid NOT NULL,
+  username text NOT NULL UNIQUE,
+  email text NOT NULL UNIQUE,
+  display_name text,
+  full_name text,
+  location text DEFAULT ''::text,
+  role text NOT NULL DEFAULT 'user'::text CHECK (role = ANY (ARRAY['admin'::text, 'user'::text, 'guest'::text])),
+  is_active boolean NOT NULL DEFAULT true,
+  timezone text NOT NULL DEFAULT 'UTC'::text,
+  preferences jsonb DEFAULT '{}'::jsonb,
+  created_at timestamp with time zone DEFAULT now(),
+  updated_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT user_profiles_pkey PRIMARY KEY (id),
+  CONSTRAINT user_profiles_id_fkey FOREIGN KEY (id) REFERENCES auth.users(id)
+);
+CREATE TABLE public.wa_conversations (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL,
+  ai_agent_id uuid,
+  phone_number character varying NOT NULL,
+  contact_name character varying,
+  contact_email text,
+  contact_notes text,
+  last_message text,
+  last_message_time text NOT NULL,
+  is_unread boolean DEFAULT true,
+  is_archived boolean DEFAULT false,
+  created_at text NOT NULL DEFAULT (now() AT TIME ZONE 'ist'::text),
+  updated_at timestamp with time zone DEFAULT (now() AT TIME ZONE 'utc'::text),
+  CONSTRAINT wa_conversations_pkey PRIMARY KEY (id),
+  CONSTRAINT conversations_ai_agent_id_fkey FOREIGN KEY (ai_agent_id) REFERENCES public.ai_agents(id),
+  CONSTRAINT conversations_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id)
+);
+CREATE TABLE public.wa_messages (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  conversation_id uuid NOT NULL,
+  message_id character varying NOT NULL UNIQUE,
+  content text NOT NULL,
+  message_type character varying NOT NULL DEFAULT 'text'::character varying CHECK (message_type::text = ANY (ARRAY['text'::character varying::text, 'image'::character varying::text, 'video'::character varying::text, 'audio'::character varying::text, 'document'::character varying::text, 'location'::character varying::text, 'contacts'::character varying::text, 'sticker'::character varying::text, 'reaction'::character varying::text])),
+  direction character varying NOT NULL CHECK (direction::text = ANY (ARRAY['incoming'::character varying::text, 'outgoing'::character varying::text, 'ai_outgoing'::character varying::text])),
+  status character varying,
+  timestamp text NOT NULL,
+  status_timestamp text,
+  template_id uuid,
+  media_info jsonb,
+  raw_data jsonb,
+  created_at text NOT NULL,
+  updated_at text NOT NULL,
+  CONSTRAINT wa_messages_pkey PRIMARY KEY (id),
+  CONSTRAINT messages_template_id_fkey FOREIGN KEY (template_id) REFERENCES public.message_templates(id),
+  CONSTRAINT messages_conversation_id_fkey FOREIGN KEY (conversation_id) REFERENCES public.wa_conversations(id)
+);
+CREATE TABLE public.wa_template_groups (
+  id bigint GENERATED ALWAYS AS IDENTITY NOT NULL,
+  user_id uuid,
+  group_name text,
+  group_contacts json,
+  CONSTRAINT wa_template_groups_pkey PRIMARY KEY (id),
+  CONSTRAINT wa_template_groups_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id)
+);
+CREATE TABLE public.webhook_logs (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  user_id uuid,
+  webhook_type character varying,
+  status character varying CHECK (status::text = ANY (ARRAY['success'::character varying::text, 'error'::character varying::text, 'skipped'::character varying::text, 'pending'::character varying::text])),
+  payload jsonb NOT NULL,
+  response jsonb,
+  error_message text,
+  processing_time_ms integer,
+  created_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT webhook_logs_pkey PRIMARY KEY (id),
+  CONSTRAINT webhook_logs_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id)
+);
+CREATE TABLE public.whatsapp_templates (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  name text NOT NULL,
+  category text NOT NULL,
+  language text NOT NULL,
+  body text NOT NULL,
+  footer text,
+  variables jsonb,
+  buttons jsonb,
+  status text NOT NULL DEFAULT 'pending'::text,
+  created_at timestamp without time zone NOT NULL DEFAULT now(),
+  updated_at timestamp without time zone,
+  header_media_url text,
+  header_text text,
+  sample_content jsonb,
+  meta_business_account_id text,
+  whatsapp_phone_number_id text,
+  whatsapp_numeric_id text,
+  header_media_id text,
+  header_media_type text,
+  user_id uuid,
+  CONSTRAINT whatsapp_templates_pkey PRIMARY KEY (id),
+  CONSTRAINT whatsapp_templates_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id)
+);
+
+
+
+
+
+User Side --
+

@@ -94,7 +94,9 @@ class _TrustMeScreenState extends State<TrustMeScreen> {
       }
     } catch (e) {
       debugPrint("Fatal Node Initialization Error: $e");
-      if (mounted) setState(() => _isGeneratingKeys = false);
+      if (mounted) {
+        setState(() => _isGeneratingKeys = false);
+      }
     }
   }
 
@@ -175,9 +177,12 @@ class _TrustMeScreenState extends State<TrustMeScreen> {
                   final urlMatch = RegExp(r'https?://[^\s|]+').firstMatch(text);
                   final codeMatch = RegExp(r'\b\d{6}\b').firstMatch(text);
 
-                  if (urlMatch != null) urlController.text = urlMatch.group(0)!;
-                  if (codeMatch != null)
+                  if (urlMatch != null) {
+                    urlController.text = urlMatch.group(0)!;
+                  }
+                  if (codeMatch != null) {
                     codeController.text = codeMatch.group(0)!;
+                  }
                 },
               ),
             ],
@@ -272,7 +277,9 @@ class _TrustMeScreenState extends State<TrustMeScreen> {
                 final peerUrl = urlController.text.trim();
                 final code = codeController.text.trim();
 
-                if (peerUrl.isEmpty || code.length != 6) return;
+                if (peerUrl.isEmpty || code.length != 6) {
+                  return;
+                }
 
                 Navigator.pop(dialogContext);
 
@@ -288,14 +295,9 @@ class _TrustMeScreenState extends State<TrustMeScreen> {
                 );
 
                 try {
-                  final myUsername =
-                      await _secureStorage.read(key: 'current_username') ??
-                      'unknown_user';
-
                   await TrustMeService.instance.initiatePeerConnection(
                     peerUrl: peerUrl,
                     code: code,
-                    myUsername: myUsername,
                     myUrl: _myNodeUrl, // 🚀 Use the real URL here too!
                   );
 
@@ -572,7 +574,9 @@ class _TrustMeScreenState extends State<TrustMeScreen> {
                           ClipboardData(text: _myNodeUrl),
                         );
 
-                        if (!mounted) return;
+                        if (!mounted) {
+                          return;
+                        }
                         scaffoldMessenger.showSnackBar(
                           const SnackBar(
                             content: Text("Node Address copied!"),
@@ -707,7 +711,9 @@ class _CountdownCodeDialogState extends State<_CountdownCodeDialog> {
         setState(() => _timeLeft--);
       } else {
         timer.cancel();
-        if (mounted) Navigator.of(context).pop();
+        if (mounted) {
+          Navigator.of(context).pop();
+        }
       }
     });
   }

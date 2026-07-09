@@ -3,11 +3,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:supabase_flutter/supabase_flutter.dart'; // Needed for self-healing
+import 'package:supabase_flutter/supabase_flutter.dart'; 
 import '../../models/vault_file.dart';
 import '../../services/supabase_service.dart';
 import '../../services/storage_service.dart';
 import '../../services/external/postgres_service.dart';
+import '../../screens/mediaplayer/desktop_system_folder_screen.dart'; // 🚀 IMPORT ADDED
 
 class VaultScreen extends StatefulWidget {
   const VaultScreen({super.key});
@@ -22,7 +23,7 @@ class _VaultScreenState extends State<VaultScreen> {
 
   List<VaultFile> _files = [];
   bool _isLoading = true;
-  String? _vaultPath; // This will now point to .../vault_files
+  String? _vaultPath; 
   String? _publicUrl;
 
   @override
@@ -37,16 +38,9 @@ class _VaultScreenState extends State<VaultScreen> {
     final prefs = await SharedPreferences.getInstance();
     String? storedPath = prefs.getString('vault_path');
     String? storedUrl = await _storage.getPublicUrl();
-    String? deviceId = await _storage.getDeviceId();
     final userId = _supabase.currentUserId;
 
-    debugPrint("🛠️ DEBUG - User ID: $userId");
-    debugPrint("🛠️ DEBUG - Local URL before heal: '$storedUrl'");
-
-    // FIX: Added `.isEmpty` check to catch blank strings!
-    if ((storedPath == null || storedUrl == null || storedUrl.isEmpty) &&
-        userId != null) {
-      debugPrint("🛠️ DEBUG - Attempting to self-heal from Supabase...");
+    if ((storedPath == null || storedUrl == null || storedUrl.isEmpty) && userId != null) {
       try {
         final data = await Supabase.instance.client
             .from('desktop_devices')
@@ -56,29 +50,16 @@ class _VaultScreenState extends State<VaultScreen> {
             .limit(1)
             .maybeSingle();
 
-        debugPrint("🛠️ DEBUG - Supabase returned: $data");
-
         if (data != null) {
           if (storedPath == null && data['vault_path'] != null) {
             storedPath = data['vault_path'];
             await prefs.setString('vault_path', storedPath!);
           }
-          // Heal the Public URL!
-          if ((storedUrl == null || storedUrl.isEmpty) &&
-              data['public_url'] != null) {
+          if ((storedUrl == null || storedUrl.isEmpty) && data['public_url'] != null) {
             storedUrl = data['public_url'];
-            storedUrl = storedUrl!
-                .replaceAll('https://', '')
-                .replaceAll('http://', '');
-            if (storedUrl.endsWith('/')) {
-              storedUrl = storedUrl.substring(0, storedUrl.length - 1);
-            }
-            debugPrint("🛠️ DEBUG - Successfully healed URL to: $storedUrl");
+            storedUrl = storedUrl!.replaceAll('https://', '').replaceAll('http://', '');
+            if (storedUrl.endsWith('/')) storedUrl = storedUrl.substring(0, storedUrl.length - 1);
           }
-        } else {
-          debugPrint(
-            "❌ DEBUG - Supabase found NO device with a public_url for this user!",
-          );
         }
       } catch (e) {
         debugPrint("❌ Error fetching config from DB: $e");
@@ -93,15 +74,12 @@ class _VaultScreenState extends State<VaultScreen> {
       }
     }
 
-    final String correctVaultPath =
-        "$storedPath${Platform.pathSeparator}vault_files";
+    final String correctVaultPath = "$storedPath${Platform.pathSeparator}vault_files";
 
     if (mounted) {
       setState(() {
         _vaultPath = correctVaultPath;
-        _publicUrl = (storedUrl != null && storedUrl.isNotEmpty)
-            ? storedUrl
-            : null;
+        _publicUrl = (storedUrl != null && storedUrl.isNotEmpty) ? storedUrl : null;
       });
       await _refreshFiles();
     }
@@ -109,23 +87,15 @@ class _VaultScreenState extends State<VaultScreen> {
 
   Future<void> _refreshFiles() async {
     if (_vaultPath == null) return;
-
     final dir = Directory(_vaultPath!);
 
-    // Auto-create if missing (e.g. first run)
-    if (!await dir.exists()) {
-      await dir.create(recursive: true);
-    }
+    if (!await dir.exists()) await dir.create(recursive: true);
 
     try {
-      final List<FileSystemEntity> entities = dir.listSync(
-        recursive: false,
-      ); // recursive: false is safer for flat vaults
+      final List<FileSystemEntity> entities = dir.listSync(recursive: false); 
       final List<File> files = entities.whereType<File>().toList();
 
-      files.sort(
-        (a, b) => b.lastModifiedSync().compareTo(a.lastModifiedSync()),
-      );
+      files.sort((a, b) => b.lastModifiedSync().compareTo(a.lastModifiedSync()));
 
       final userId = _supabase.currentUserId ?? 'local-user';
 
@@ -152,7 +122,6 @@ class _VaultScreenState extends State<VaultScreen> {
         });
       }
     } catch (e) {
-      print("Error reading vault: $e");
       if (mounted) setState(() => _isLoading = false);
     }
   }
@@ -160,9 +129,7 @@ class _VaultScreenState extends State<VaultScreen> {
   void _handleShare(VaultFile file) {
     if (_publicUrl == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text("Public URL not configured. Check Settings."),
-        ),
+        const SnackBar(content: Text("Public URL not configured. Check Settings.")),
       );
       return;
     }
@@ -179,10 +146,7 @@ class _VaultScreenState extends State<VaultScreen> {
         builder: (context, setStateBuilder) {
           return AlertDialog(
             backgroundColor: const Color(0xFF1E293B),
-            title: Text(
-              "Share: ${file.fileName}",
-              style: const TextStyle(color: Colors.white, fontSize: 16),
-            ),
+            title: Text("Share: ${file.fileName}", style: const TextStyle(color: Colors.white, fontSize: 16)),
             content: SizedBox(
               width: 400,
               child: SingleChildScrollView(
@@ -190,35 +154,21 @@ class _VaultScreenState extends State<VaultScreen> {
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // --- PUBLIC / PRIVATE TOGGLE ---
                     SwitchListTile(
-                      title: const Text(
-                        "Make Public link",
-                        style: TextStyle(color: Colors.white),
-                      ),
-                      subtitle: Text(
-                        isPublic
-                            ? "Anyone with the link can view"
-                            : "Only allowed emails with token",
-                        style: TextStyle(color: Colors.grey[400], fontSize: 12),
-                      ),
+                      title: const Text("Make Public link", style: TextStyle(color: Colors.white)),
+                      subtitle: Text(isPublic ? "Anyone with the link can view" : "Only allowed emails with token", style: TextStyle(color: Colors.grey[400], fontSize: 12)),
                       activeThumbColor: Colors.cyanAccent,
                       value: isPublic,
                       onChanged: (val) {
                         setStateBuilder(() {
                           isPublic = val;
-                          generatedLink = null; // Reset link if settings change
+                          generatedLink = null;
                         });
                       },
                     ),
                     const Divider(color: Colors.grey),
-
-                    // --- RESTRICTED EMAILS INPUT ---
                     if (!isPublic) ...[
-                      const Text(
-                        "Allowed Emails (comma separated)",
-                        style: TextStyle(color: Colors.white, fontSize: 12),
-                      ),
+                      const Text("Allowed Emails (comma separated)", style: TextStyle(color: Colors.white, fontSize: 12)),
                       const SizedBox(height: 8),
                       TextField(
                         controller: emailsController,
@@ -228,73 +178,41 @@ class _VaultScreenState extends State<VaultScreen> {
                           hintStyle: TextStyle(color: Colors.grey[600]),
                           filled: true,
                           fillColor: const Color(0xFF0F172A),
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(8),
-                            borderSide: BorderSide.none,
-                          ),
+                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide.none),
                         ),
                       ),
                       const SizedBox(height: 16),
                     ],
-
-                    // --- EXPIRATION DATE ---
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
                         Text(
-                          selectedExpiration == null
-                              ? "No Expiration Date"
-                              : "Expires: ${selectedExpiration!.toLocal().toString().split(' ')[0]}",
-                          style: TextStyle(
-                            color: Colors.grey[400],
-                            fontSize: 12,
-                          ),
+                          selectedExpiration == null ? "No Expiration Date" : "Expires: ${selectedExpiration!.toLocal().toString().split(' ')[0]}",
+                          style: TextStyle(color: Colors.grey[400], fontSize: 12),
                         ),
                         TextButton.icon(
-                          icon: const Icon(
-                            Icons.calendar_today,
-                            size: 14,
-                            color: Colors.cyanAccent,
-                          ),
-                          label: const Text(
-                            "Set Date",
-                            style: TextStyle(color: Colors.cyanAccent),
-                          ),
+                          icon: const Icon(Icons.calendar_today, size: 14, color: Colors.cyanAccent),
+                          label: const Text("Set Date", style: TextStyle(color: Colors.cyanAccent)),
                           onPressed: () async {
                             final date = await showDatePicker(
                               context: context,
-                              initialDate: DateTime.now().add(
-                                const Duration(days: 7),
-                              ),
+                              initialDate: DateTime.now().add(const Duration(days: 7)),
                               firstDate: DateTime.now(),
-                              lastDate: DateTime.now().add(
-                                const Duration(days: 365),
-                              ),
+                              lastDate: DateTime.now().add(const Duration(days: 365)),
                             );
-                            if (date != null) {
-                              setStateBuilder(() => selectedExpiration = date);
-                            }
+                            if (date != null) setStateBuilder(() => selectedExpiration = date);
                           },
                         ),
                       ],
                     ),
-
-                    // --- GENERATED LINK VIEW ---
                     if (generatedLink != null) ...[
                       const SizedBox(height: 20),
                       Container(
                         padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: Colors.black26,
-                          borderRadius: BorderRadius.circular(8),
-                        ),
+                        decoration: BoxDecoration(color: Colors.black26, borderRadius: BorderRadius.circular(8)),
                         child: SelectableText(
                           generatedLink!,
-                          style: const TextStyle(
-                            color: Colors.cyanAccent,
-                            fontFamily: 'Courier',
-                            fontSize: 12,
-                          ),
+                          style: const TextStyle(color: Colors.cyanAccent, fontFamily: 'Courier', fontSize: 12),
                         ),
                       ),
                     ],
@@ -303,88 +221,50 @@ class _VaultScreenState extends State<VaultScreen> {
               ),
             ),
             actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context),
-                child: const Text(
-                  "Close",
-                  style: TextStyle(color: Colors.grey),
-                ),
-              ),
-
-              // --- ACTION BUTTON (Generate or Copy) ---
+              TextButton(onPressed: () => Navigator.pop(context), child: const Text("Close", style: TextStyle(color: Colors.grey))),
               if (generatedLink == null)
                 ElevatedButton(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.cyanAccent,
-                    foregroundColor: Colors.black,
-                  ),
+                  style: ElevatedButton.styleFrom(backgroundColor: Colors.cyanAccent, foregroundColor: Colors.black),
                   onPressed: isGenerating
                       ? null
                       : () async {
                           setStateBuilder(() => isGenerating = true);
-
                           try {
-                            // Process emails
-                            List<String> emails = emailsController.text
-                                .split(',')
-                                .map((e) => e.trim())
-                                .where((e) => e.isNotEmpty)
-                                .toList();
-
-                            // Save to Postgres
-                            final token = await PostgresService()
-                                .createShareSettings(
+                            List<String> emails = emailsController.text.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
+                            final token = await PostgresService().createShareSettings(
                                   fileName: file.fileName,
                                   isPublic: isPublic,
                                   emails: emails,
                                   expiresAt: selectedExpiration,
                                 );
-
-                            // Build the URL
                             final safeName = Uri.encodeComponent(file.fileName);
-                            String link =
-                                "https://$_publicUrl/vault/files/$safeName";
-                            if (!isPublic && token != null) {
-                              link += "?token=$token";
-                            }
-
+                            String link = "https://$_publicUrl/vault/files/$safeName";
+                            if (!isPublic && token != null) link += "?token=$token";
                             setStateBuilder(() {
                               generatedLink = link;
                               isGenerating = false;
                             });
                           } catch (e) {
                             setStateBuilder(() => isGenerating = false);
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(content: Text("Error: $e")),
-                            );
+                            // 🚀 FIXED: Wrapped within explicit context mounted assertion logic checks
+                            if (context.mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error: $e")));
+                            }
                           }
                         },
-                  child: isGenerating
-                      ? const SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Text("Generate Link"),
+                  child: isGenerating ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)) : const Text("Generate Link"),
                 )
               else
                 ElevatedButton.icon(
                   icon: const Icon(Icons.copy, size: 16),
                   label: const Text("Copy Link"),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.cyanAccent,
-                    foregroundColor: Colors.black,
-                  ),
+                  style: ElevatedButton.styleFrom(backgroundColor: Colors.cyanAccent, foregroundColor: Colors.black),
                   onPressed: () async {
-                    await Clipboard.setData(
-                      ClipboardData(text: generatedLink!),
-                    );
+                    // 🚀 FIXED: Captured structural instance context snapshot before async gaps to bypass context leaks
+                    final messenger = ScaffoldMessenger.of(context);
+                    await Clipboard.setData(ClipboardData(text: generatedLink!));
+                    messenger.showSnackBar(const SnackBar(content: Text("Link copied to clipboard!")));
                     if (context.mounted) Navigator.pop(context);
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text("Link copied to clipboard!"),
-                      ),
-                    );
                   },
                 ),
             ],
@@ -399,12 +279,13 @@ class _VaultScreenState extends State<VaultScreen> {
     try {
       if (Platform.isLinux) {
         await Process.run('xdg-open', [path]);
-      } else if (Platform.isMacOS)
+      } else if (Platform.isMacOS) {
         await Process.run('open', [path]);
-      else if (Platform.isWindows)
+      } else if (Platform.isWindows) {
         await Process.run('explorer', [path]);
+      }
     } catch (e) {
-      print("Could not open file: $e");
+      debugPrint("Could not open file: $e");
     }
   }
 
@@ -412,18 +293,49 @@ class _VaultScreenState extends State<VaultScreen> {
     if (path == null) return 'application/octet-stream';
     final ext = path.split('.').last.toLowerCase();
     switch (ext) {
-      case 'jpg':
-      case 'jpeg':
-        return 'image/jpeg';
-      case 'png':
-        return 'image/png';
-      case 'pdf':
-        return 'application/pdf';
-      case 'mp4':
-        return 'video/mp4';
-      default:
-        return 'application/octet-stream';
+      case 'jpg': case 'jpeg': return 'image/jpeg';
+      case 'png': return 'image/png';
+      case 'pdf': return 'application/pdf';
+      case 'mp4': return 'video/mp4';
+      default: return 'application/octet-stream';
     }
+  }
+
+  // 🚀 ROUTING: Triggers when a System Folder is clicked
+  void _openSystemFolder(String folderName) {
+    String type = 'drafts';
+    IconData icon = LucideIcons.edit3;
+    Color color = Colors.purpleAccent;
+
+    if (folderName == "Posted Videos") {
+      type = 'posted';
+      icon = LucideIcons.uploadCloud;
+      color = const Color(0xFF00E5FF);
+    } else if (folderName == "Saved Videos") {
+      type = 'saved';
+      icon = LucideIcons.bookmark;
+      color = Colors.amberAccent;
+    } else if (folderName == "Repost Videos") {
+      type = 'repost';
+      icon = LucideIcons.repeat;
+      color = Colors.lightGreenAccent;
+    } else if (folderName == "Vault Folder") {
+      type = 'vault_sys';
+      icon = LucideIcons.shield;
+      color = Colors.orangeAccent;
+    }
+
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => DesktopSystemFolderScreen(
+          folderType: type,
+          folderTitle: folderName,
+          folderIcon: icon,
+          folderColor: color,
+        ),
+      ),
+    );
   }
 
   @override
@@ -431,53 +343,130 @@ class _VaultScreenState extends State<VaultScreen> {
     return Scaffold(
       backgroundColor: const Color(0xFF0F172A),
       appBar: AppBar(
-        title: const Text("Local Vault"),
-        backgroundColor: Colors.transparent,
+        title: const Text("Central Vault", style: TextStyle(fontWeight: FontWeight.bold)),
+        backgroundColor: const Color(0xFF0F172A),
         elevation: 0,
         actions: [
           IconButton(
-            icon: const Icon(Icons.folder_open),
-            tooltip: "Open in File Manager",
+            icon: const Icon(Icons.folder_open, color: Colors.white),
+            tooltip: "Open in System Explorer",
             onPressed: () {
               if (_vaultPath != null) _openFile(_vaultPath);
             },
           ),
-          IconButton(icon: const Icon(Icons.refresh), onPressed: _refreshFiles),
+          IconButton(
+            icon: const Icon(Icons.refresh, color: Colors.white), 
+            onPressed: _refreshFiles
+          ),
+          const SizedBox(width: 16),
         ],
       ),
       body: _isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : _files.isEmpty
-          ? Center(
+          ? const Center(child: CircularProgressIndicator(color: Color(0xFF00E5FF)))
+          : SingleChildScrollView(
+              padding: const EdgeInsets.all(32),
               child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text(
-                    "Vault is Empty",
-                    style: TextStyle(color: Colors.grey, fontSize: 18),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text("Local Files", style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
+                      Text(
+                        "Root: ${_vaultPath?.split(Platform.pathSeparator).last ?? ''}", 
+                        style: TextStyle(color: Colors.grey.shade500, fontFamily: 'Courier', fontSize: 12)
+                      ),
+                    ],
                   ),
-                  const SizedBox(height: 10),
-                  Text(
-                    "Folder: $_vaultPath",
-                    style: TextStyle(
-                      color: Colors.grey[700],
-                      fontFamily: 'Courier',
+                  const SizedBox(height: 24),
+
+                  GridView.builder(
+                    shrinkWrap: true, 
+                    physics: const NeverScrollableScrollPhysics(), 
+                    gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+                      maxCrossAxisExtent: 180, 
+                      childAspectRatio: 0.85,
+                      crossAxisSpacing: 16,
+                      mainAxisSpacing: 16,
                     ),
+                    itemCount: _files.length + 5,
+                    itemBuilder: (context, index) {
+                      
+                      // 1. Render the "Posted Videos" Folder
+                      if (index == 0) {
+                        return _buildVirtualFolderCard("Posted Videos", LucideIcons.uploadCloud, const Color(0xFF00E5FF));
+                      }
+                      // 2. Render the "Saved Videos" Folder
+                      if (index == 1) {
+                        return _buildVirtualFolderCard("Saved Videos", LucideIcons.bookmark, Colors.amberAccent);
+                      }
+                      // 3. Render the "Drafts" Folder
+                      if (index == 2) {
+                        return _buildVirtualFolderCard("Drafts", LucideIcons.edit3, Colors.purpleAccent);
+                      }
+                      // 4. Render the "Repost Videos" Folder
+                      if (index == 3) {
+                        return _buildVirtualFolderCard("Repost Videos", LucideIcons.repeat, Colors.lightGreenAccent);
+                      }
+                      // 5. Render the "Vault Folder" Folder
+                      if (index == 4) {
+                        return _buildVirtualFolderCard("Vault Folder", LucideIcons.shield, Colors.orangeAccent);
+                      }
+
+                      // 6. Render the actual physical files
+                      return _buildFileCard(_files[index - 5]);
+                    },
                   ),
                 ],
               ),
-            )
-          : GridView.builder(
-              padding: const EdgeInsets.all(24),
-              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                crossAxisCount: 6,
-                childAspectRatio: 0.85,
-                crossAxisSpacing: 16,
-                mainAxisSpacing: 16,
-              ),
-              itemCount: _files.length,
-              itemBuilder: (context, index) => _buildFileCard(_files[index]),
             ),
+    );
+  }
+
+  // 🚀 WIDGET: A square folder that perfectly matches the File Card dimensions
+  Widget _buildVirtualFolderCard(String title, IconData icon, Color color) {
+    return InkWell(
+      onTap: () => _openSystemFolder(title),
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        decoration: BoxDecoration(
+          color: const Color(0xFF1E293B),
+          borderRadius: BorderRadius.circular(12),
+          // 🚀 FIXED: Swapped deprecated .withOpacity constraints for .withValues parameters
+          border: Border.all(color: color.withValues(alpha: 0.3), width: 1.5),
+          boxShadow: [
+            BoxShadow(
+              color: color.withValues(alpha: 0.05),
+              blurRadius: 15,
+              offset: const Offset(0, 5),
+            )
+          ]
+        ),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: color.withValues(alpha: 0.1),
+                shape: BoxShape.circle,
+              ),
+              child: Icon(icon, color: color, size: 36),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              title,
+              style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 4),
+            Text(
+              "System Folder",
+              style: TextStyle(color: Colors.grey.shade400, fontSize: 10),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -495,21 +484,31 @@ class _VaultScreenState extends State<VaultScreen> {
         decoration: BoxDecoration(
           color: const Color(0xFF1E293B),
           borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: Colors.white.withOpacity(0.05)),
+          // 🚀 FIXED: Adjusted color rendering format layout targets to clear opacity deprecations
+          border: Border.all(color: Colors.white.withValues(alpha: 0.05)),
         ),
         child: Column(
           children: [
             Expanded(
               child: isImg && safePath.isNotEmpty
-                  ? Image.file(File(safePath), fit: BoxFit.cover)
-                  : Icon(
-                      _getFileIcon(fType),
-                      size: 40,
-                      color: Colors.cyanAccent,
+                  ? ClipRRect(
+                      borderRadius: const BorderRadius.only(topLeft: Radius.circular(12), topRight: Radius.circular(12)),
+                      child: Image.file(File(safePath), fit: BoxFit.cover, width: double.infinity),
+                    )
+                  : Center(
+                      child: Icon(
+                        _getFileIcon(fType),
+                        size: 40,
+                        color: const Color(0xFF00E5FF),
+                      ),
                     ),
             ),
-            Padding(
-              padding: const EdgeInsets.all(8.0),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(12.0),
+              decoration: const BoxDecoration(
+                border: Border(top: BorderSide(color: Colors.white10))
+              ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -517,7 +516,7 @@ class _VaultScreenState extends State<VaultScreen> {
                     file.fileName,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(color: Colors.white, fontSize: 12),
+                    style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600),
                   ),
                   const SizedBox(height: 4),
                   Text(
@@ -535,14 +534,10 @@ class _VaultScreenState extends State<VaultScreen> {
 
   IconData _getFileIcon(String ext) {
     switch (ext) {
-      case 'pdf':
-        return LucideIcons.fileText;
-      case 'mp4':
-        return LucideIcons.video;
-      case 'zip':
-        return LucideIcons.archive;
-      default:
-        return LucideIcons.file;
+      case 'pdf': return LucideIcons.fileText;
+      case 'mp4': return LucideIcons.video;
+      case 'zip': return LucideIcons.archive;
+      default: return LucideIcons.file;
     }
   }
 

@@ -61,40 +61,34 @@ class TrustMeService {
 
     try {
       final supabase = Supabase.instance.client;
-      final userId = supabase.auth.currentUser?.id;
+      final user = supabase.auth.currentUser;
+      final userId = user?.id;
 
       if (userId != null) {
         const secureStorage = FlutterSecureStorage();
-        final myUsername =
-            await secureStorage.read(key: 'current_username') ?? 'Peer_A';
+        
+        // 🚀 Fetch display name directly from Supabase Auth
+        final authName = user?.userMetadata?['display_name'] ?? 
+                         user?.userMetadata?['name'] ?? 
+                         user?.userMetadata?['full_name'];
+                         
+        final myUsername = authName ?? await secureStorage.read(key: 'current_username') ?? 'Peer_A';
 
-        var myUrl = await secureStorage.read(key: 'public_url') ?? '';
-        if (myUrl.isNotEmpty && !myUrl.startsWith('http')) {
-          myUrl = 'https://$myUrl';
-        }
-
-        final myIdentityKey =
-            await secureStorage.read(key: 'my_identity_pubkey') ?? '';
-        final mySignedPreKey =
-            await secureStorage.read(key: 'my_signed_prekey') ?? '';
         final mySignedPreKeyId =
             await secureStorage.read(key: 'my_signed_prekey_id') ?? '0';
 
-        // 1. Upload Node A's details to Supabase
+        // 1. Upload Node A's details to Supabase (matching new schema)
         await supabase.from('trust_me_secure_invites').insert({
           'creator_id': userId,
           'invite_code': code,
           'creator_username': myUsername,
-          'creator_cloudflare_url': myUrl,
-          'creator_identity_pubkey': myIdentityKey,
-          'creator_signed_prekey': mySignedPreKey,
-          // 🚀 CRITICAL FIX: Safe parsing so empty strings don't crash!
+          // creator_cloudflare_url, creator_identity_pubkey, and creator_signed_prekey removed as per new schema
           'creator_signed_prekey_id': int.tryParse(mySignedPreKeyId) ?? 0,
         });
 
         print("✅ Invite logged. Launching Background Radar...");
 
-        // 🚀 THE FIX: Start radar in the background so it doesn't freeze the app!
+        // Start radar in the background so it doesn't freeze the app!
         _startActiveRadar(code);
       }
     } catch (e) {
@@ -105,7 +99,7 @@ class TrustMeService {
     return data;
   }
 
-  // 🚀 NEW BACKGROUND FUNCTION: Watches Supabase for 5 Full Minutes
+  // BACKGROUND FUNCTION: Watches Supabase for 5 Full Minutes
   Future<void> _startActiveRadar(String code) async {
     final supabase = Supabase.instance.client;
     bool nodeBJoined = false;
@@ -133,9 +127,10 @@ class TrustMeService {
           await finaliseHandshakeLocallyForNodeA(
             joinerGId: checkResult['connected_with'],
             joinerUsername: checkResult['joiner_username'] ?? 'Peer_B',
-            joinerUrl: checkResult['joiner_cloudflare_url'],
-            identityKey: checkResult['joiner_identity_pubkey'] ?? 'pending',
-            signedPreKey: checkResult['joiner_signed_prekey'] ?? 'pending',
+            joinerUrl: checkResult['joiner_cloudflare_url'] ?? '',
+            // Since keys were removed from DB schema, we flag them as pending 
+            identityKey: 'pending',
+            signedPreKey: 'pending',
             signedPreKeyId: checkResult['joiner_signed_prekey_id'] ?? 0,
           );
         }
@@ -153,7 +148,6 @@ class TrustMeService {
   Future<Map<String, dynamic>> initiatePeerConnection({
     required String peerUrl,
     required String code,
-    required String myUsername,
     required String myUrl,
   }) async {
     var target = peerUrl.trim();
@@ -162,7 +156,8 @@ class TrustMeService {
 
     try {
       final supabase = Supabase.instance.client;
-      final myUserId = supabase.auth.currentUser?.id;
+      final user = supabase.auth.currentUser;
+      final myUserId = user?.id;
 
       if (myUserId != null) {
         final inviteResult = await supabase
@@ -170,51 +165,48 @@ class TrustMeService {
             .select()
             .eq('invite_code', code)
             .maybeSingle();
-        if (inviteResult == null)
+            
+        if (inviteResult == null) {
           throw Exception("Invalid or expired invite code.");
+        }
 
         final creatorId = inviteResult['creator_id'];
         final creatorUsername = inviteResult['creator_username'] ?? 'Peer_A';
-
-        var creatorUrl = inviteResult['creator_cloudflare_url'] ?? target;
-        if (creatorUrl.isNotEmpty && !creatorUrl.startsWith('http')) {
-          creatorUrl = 'https://$creatorUrl';
-        }
-
-        final creatorIdentity = inviteResult['creator_identity_pubkey'];
-        final creatorPrekey = inviteResult['creator_signed_prekey'];
         final creatorPrekeyId = inviteResult['creator_signed_prekey_id'];
 
         const secureStorage = FlutterSecureStorage();
-        final myIdentityKey =
-            await secureStorage.read(key: 'my_identity_pubkey') ?? '';
-        final mySignedPreKey =
-            await secureStorage.read(key: 'my_signed_prekey') ?? '';
+        
+        // 🚀 Fetch display name directly from Supabase Auth for Node B
+        final authName = user?.userMetadata?['display_name'] ?? 
+                         user?.userMetadata?['name'] ?? 
+                         user?.userMetadata?['full_name'];
+                         
+        final myUsername = authName ?? await secureStorage.read(key: 'current_username') ?? 'Peer_B';
+        
         final mySignedPreKeyId =
             await secureStorage.read(key: 'my_signed_prekey_id') ?? '0';
 
-        // Node B uploads its own keys to Supabase so Node A's Radar can find them
+        // Node B uploads its data to Supabase (matching new schema)
         await supabase
             .from('trust_me_secure_invites')
             .update({
               'connected_with': myUserId,
               'joiner_username': myUsername,
               'joiner_cloudflare_url': myUrl,
-              'joiner_identity_pubkey': myIdentityKey,
-              'joiner_signed_prekey': mySignedPreKey,
-              // 🚀 CRITICAL FIX: Safe parsing!
+              // joiner_identity_pubkey and joiner_signed_prekey removed as per new schema
               'joiner_signed_prekey_id': int.tryParse(mySignedPreKeyId) ?? 0,
             })
             .eq('id', inviteResult['id']);
 
-        // Pass Node A's real keys to the local Postgres Database
+        // Pass Node A's details to the local Postgres Database
         await _finaliseConnectionLocally(
           counterpartGId: creatorId,
           counterpartUsername: creatorUsername,
-          counterpartUrl: creatorUrl,
-          identityKey: creatorIdentity ?? 'pending',
-          signedPreKey: creatorPrekey ?? 'pending',
-          // 🚀 CRITICAL FIX: Safe parsing for incoming Supabase data!
+          // creator_cloudflare_url was removed from DB, fallback to user provided target
+          counterpartUrl: target, 
+          // Since keys were removed from DB schema, we flag them as pending
+          identityKey: 'pending',
+          signedPreKey: 'pending',
           signedPreKeyId: int.tryParse(creatorPrekeyId?.toString() ?? '0') ?? 0,
         );
 
@@ -293,11 +285,14 @@ class TrustMeService {
     required String content,
     String contentType = 'text',
   }) async {
-    final myUserId =
-        Supabase.instance.client.auth.currentUser?.id ?? 'unknown_user';
-    final myUsername =
-        await const FlutterSecureStorage().read(key: 'current_username') ??
-        'Me';
+    final user = Supabase.instance.client.auth.currentUser;
+    final myUserId = user?.id ?? 'unknown_user';
+    
+    final authName = user?.userMetadata?['display_name'] ?? 
+                     user?.userMetadata?['name'] ?? 
+                     user?.userMetadata?['full_name'];
+                     
+    final myUsername = authName ?? await const FlutterSecureStorage().read(key: 'current_username') ?? 'Me';
 
     final response = await http.post(
       Uri.parse('$_gatewayUrl/internal/message/send'),
@@ -313,23 +308,52 @@ class TrustMeService {
     return jsonDecode(response.body) as Map<String, dynamic>;
   }
 
-  // 🚀 BRAND NEW: Streams massive media files (Bypasses JSON, no memory freezing!)
+  Future<bool> editMessage({required String conversationId, required String messageId, required String newContent}) async {
+    try {
+      final response = await http.post(
+        Uri.parse('$_gatewayUrl/internal/message/edit'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'conversation_id': conversationId, 'message_id': messageId, 'new_content': newContent}),
+      );
+      return response.statusCode == 200;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  Future<bool> deleteMessage({required String conversationId, required String messageId, required bool forEveryone}) async {
+    try {
+      final response = await http.post(
+        Uri.parse('$_gatewayUrl/internal/message/delete'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'conversation_id': conversationId, 'message_id': messageId, 'for_everyone': forEveryone}),
+      );
+      return response.statusCode == 200;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  // Streams massive media files (Bypasses JSON, no memory freezing!)
   Future<Map<String, dynamic>> streamMediaFile({
     required String conversationId,
     required String filePath,
     required String contentType,
   }) async {
-    final myUserId =
-        Supabase.instance.client.auth.currentUser?.id ?? 'unknown_user';
-    final myUsername =
-        await const FlutterSecureStorage().read(key: 'current_username') ??
-        'Me';
+    final user = Supabase.instance.client.auth.currentUser;
+    final myUserId = user?.id ?? 'unknown_user';
+    
+    final authName = user?.userMetadata?['display_name'] ?? 
+                     user?.userMetadata?['name'] ?? 
+                     user?.userMetadata?['full_name'];
+                     
+    final myUsername = authName ?? await const FlutterSecureStorage().read(key: 'current_username') ?? 'Me';
 
     final file = File(filePath);
     final ext = filePath.split('.').last.toLowerCase();
     final length = await file.length();
 
-    // 1. Create a raw StreamedRequest pointing to our new Docker endpoint
+    // 1. Create a raw StreamedRequest pointing to our Docker endpoint
     final request = http.StreamedRequest(
       'POST',
       Uri.parse('$_gatewayUrl/internal/message/stream_send/$conversationId/$ext'),
@@ -341,7 +365,7 @@ class TrustMeService {
     request.headers['x-content-type'] = contentType;
     request.contentLength = length;
 
-    // 3. 🚀 The Magic: Pipe the file directly from the hard drive to the network!
+    // 3. Pipe the file directly from the hard drive to the network!
     file.openRead().listen(
       request.sink.add,
       onDone: request.sink.close,
@@ -359,7 +383,7 @@ class TrustMeService {
     return jsonDecode(responseBody) as Map<String, dynamic>;
   }
 
-  // 🚀 UPDATED: Crash-proof message fetching!
+  // Crash-proof message fetching!
   Future<List<Map<String, dynamic>>> getMessages(String conversationId) async {
     try {
       final response = await http.get(
@@ -378,7 +402,37 @@ class TrustMeService {
     }
   }
 
-  // 🚀 THE FIX: Added the method to tell the local Gateway to clear the unread badge!
+  // Fetch contact_id + current names for a conversation
+  Future<Map<String, dynamic>?> getContactForConversation(String conversationId) async {
+    try {
+      final response = await http.get(
+        Uri.parse('$_gatewayUrl/internal/conversation/$conversationId/contact'),
+      );
+      if (response.statusCode != 200) return null;
+      return jsonDecode(response.body) as Map<String, dynamic>;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  // Update custom_username via conversation_id. Pass empty string to clear/revert.
+  Future<bool> renameContact({
+    required String conversationId,
+    required String customName,
+  }) async {
+    try {
+      final response = await http.post(
+        Uri.parse('$_gatewayUrl/internal/contact/rename'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'conversation_id': conversationId, 'custom_name': customName}),
+      );
+      return response.statusCode == 200;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  // Tell the local Gateway to clear the unread badge
   Future<void> markConversationAsRead(String conversationId) async {
     try {
       await http.post(
@@ -397,14 +451,15 @@ class ConversationSummary {
   final String? customUsername;
   final String? lastMessagePreview;
   final DateTime? lastMessageAt;
-  
-  int unreadCount; // 🚀 THE FIX: Removed 'final' so we can instantly set it to 0!
-  
-  final bool isOnline;
+  final String? lastMessageType; 
+
+  int unreadCount; 
+
+  bool isOnline; 
   final bool isPinned;
   final bool isMuted;
 
-  // 🚀 MAGIC HELPER: If customUsername exists, show it. Otherwise, show the default username!
+  // If customUsername exists, show it. Otherwise, show the default username.
   String get displayName {
     if (customUsername != null && customUsername!.trim().isNotEmpty) {
       return customUsername!;
@@ -419,25 +474,38 @@ class ConversationSummary {
     this.customUsername,
     this.lastMessagePreview,
     this.lastMessageAt,
+    this.lastMessageType,
     required this.unreadCount,
     required this.isOnline,
     required this.isPinned,
     required this.isMuted,
   });
 
-  factory ConversationSummary.fromJson(Map<String, dynamic> json) =>
-      ConversationSummary(
-        id: json['id'] as String,
-        type: json['type'] as String,
-        contactUsername: json['contact_username'] as String?,
-        customUsername: json['custom_username'] as String?,
-        lastMessagePreview: json['last_message_preview'] as String?,
-        lastMessageAt: json['last_message_at'] != null
-            ? DateTime.parse(json['last_message_at'] as String)
-            : null,
-        unreadCount: (json['unread_count'] as int?) ?? 0,
-        isOnline: (json['is_online'] as bool?) ?? false,
-        isPinned: (json['is_pinned'] as bool?) ?? false,
-        isMuted: (json['is_muted'] as bool?) ?? false,
-      );
+  factory ConversationSummary.fromJson(Map<String, dynamic> json) {
+    // 🚀 THE FIX: Safely parse UTC from Database and convert to Local Time (IST)
+    String? rawTime = json['last_message_at'] as String?;
+    DateTime? parsedTime;
+    
+    if (rawTime != null) {
+      // Force Flutter to recognize this as UTC time before parsing
+      if (!rawTime.endsWith('Z') && !rawTime.contains('+')) {
+        rawTime += 'Z'; 
+      }
+      parsedTime = DateTime.tryParse(rawTime)?.toLocal();
+    }
+
+    return ConversationSummary(
+      id: json['id'] as String,
+      type: json['type'] as String,
+      contactUsername: json['contact_username'] as String?,
+      customUsername: json['custom_username'] as String?,
+      lastMessagePreview: json['last_message_preview'] as String?,
+      lastMessageAt: parsedTime, // 🚀 Fixed Time is mapped here!
+      lastMessageType: json['last_message_type'] as String?,
+      unreadCount: (json['unread_count'] as int?) ?? 0,
+      isOnline: (json['is_online'] as bool?) ?? false,
+      isPinned: (json['is_pinned'] as bool?) ?? false,
+      isMuted: (json['is_muted'] as bool?) ?? false,
+    );
+  }
 }

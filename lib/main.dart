@@ -1,14 +1,17 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:media_kit/media_kit.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:window_manager/window_manager.dart';
-import 'screens/auth/login_screen.dart';
+import 'screens/auth/login_signup_screen.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'screens/auth/boot_screen.dart';
 import 'package:video_player_win/video_player_win.dart';
 
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  MediaKit.ensureInitialized();
 
   WindowsVideoPlayer.registerWith();
 
@@ -16,7 +19,7 @@ void main() async {
   await windowManager.ensureInitialized();
   WindowOptions windowOptions = const WindowOptions(
     size: Size(1280, 800),
-    center: true,
+    center: true, 
     backgroundColor: Colors.transparent,
     skipTaskbar: false,
     titleBarStyle: TitleBarStyle.hidden,
@@ -31,9 +34,11 @@ void main() async {
   
   // This must happen before any screen tries to access the database.
   await Supabase.initialize(
-    url: 'https://base.myqrmart.com',
-    anonKey:
-        'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlLWJhc2UifQ.QL7hHqH2Ko_LNAuS--BgqHrDLFCCl3j0uQPB-FjoC4w',
+    url: 'https://aqmcriergkczfkkdgkzc.supabase.co',
+    anonKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFxbWNyaWVyZ2tjemZra2Rna3pjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODI1MzU1NTUsImV4cCI6MjA5ODExMTU1NX0.GTFeWOWlfPBpQabdhwNhR0TGFg3oLzf4AOGkBbs2lP0',
+    // headers: {
+    //   'x-role': 'anon',
+    // },
   );
 
   // 3. Check Login State
@@ -41,7 +46,7 @@ void main() async {
   final bool loggedIn = prefs.getBool('is_logged_in') ?? false;
 
   runApp(
-    MyApp(startScreen: loggedIn ? const BootScreen() : const LoginScreen()),
+    MyApp(startScreen: loggedIn ? const BootScreen() : const LoginSignupScreen()),
   );
 }
 

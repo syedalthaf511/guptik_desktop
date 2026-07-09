@@ -67,7 +67,6 @@ class PostgresService {
     _isConnected = false;
     print("🔌 Database Disconnected");
   }
-
   Future<void> connectExistingUser({
     required String email,
     required String userPassword,
@@ -96,7 +95,6 @@ class PostgresService {
       rethrow;
     }
   }
-
   // ==============================================================================
   // SECTION 2: INITIALIZATION & TABLE SETUP
   // ==============================================================================
@@ -225,7 +223,7 @@ class PostgresService {
     ''');
 
     // -------------------------------------------------------------------------
-    // PART B: OLLAMA AI & SECURITY SCHEMA
+    // PART B: OLLAMA AI 
     // -------------------------------------------------------------------------
     await conn.execute('''
       CREATE TABLE IF NOT EXISTS ollama_models (
@@ -250,25 +248,7 @@ class PostgresService {
       )
     ''');
 
-    await conn.execute('''
-      CREATE TABLE IF NOT EXISTS security_calls (
-        id SERIAL PRIMARY KEY,
-        caller_name TEXT,
-        caller_number TEXT NOT NULL,
-        call_type TEXT,
-        duration_seconds INT,
-        timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      )
-    ''');
 
-    await conn.execute('''
-      CREATE TABLE IF NOT EXISTS security_messages (
-        id SERIAL PRIMARY KEY,
-        sender_number TEXT NOT NULL,
-        message_body TEXT,
-        timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      )
-    ''');
 
     // -------------------------------------------------------------------------
     // PART C: TRUST ME (V1 ENTERPRISE SCHEMA) 🚀
@@ -306,7 +286,7 @@ class PostgresService {
         id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
         contact_guptik_id TEXT NOT NULL UNIQUE,
         contact_username TEXT NOT NULL,
-        custom_username TEXT, -- 🚀 ADDED: Allows local user to rename contact
+        custom_username TEXT,
         contact_cloudflare_url TEXT NOT NULL,
         contact_identity_pubkey TEXT NOT NULL,
         contact_signed_prekey TEXT NOT NULL,
@@ -323,19 +303,13 @@ class PostgresService {
       )
     ''');
     
-    // 🚀 SAFEGUARD: Add column if table already exists in older DB
+    // SAFEGUARD
     try {
-      await conn.execute(
-        'ALTER TABLE tm_contacts ADD COLUMN IF NOT EXISTS custom_username TEXT;'
-      );
+      await conn.execute('ALTER TABLE tm_contacts ADD COLUMN IF NOT EXISTS custom_username TEXT;');
     } catch (_) {}
 
-    await conn.execute(
-      'CREATE INDEX IF NOT EXISTS idx_tm_contacts_username ON tm_contacts(contact_username)',
-    );
-    await conn.execute(
-      'CREATE INDEX IF NOT EXISTS idx_tm_contacts_status ON tm_contacts(status)',
-    );
+    await conn.execute('CREATE INDEX IF NOT EXISTS idx_tm_contacts_username ON tm_contacts(contact_username)');
+    await conn.execute('CREATE INDEX IF NOT EXISTS idx_tm_contacts_status ON tm_contacts(status)');
 
     // 3. HANDSHAKE SESSIONS
     await conn.execute('''
@@ -378,9 +352,7 @@ class PostgresService {
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )
     ''');
-    await conn.execute(
-      'CREATE INDEX IF NOT EXISTS idx_tm_pending_direction ON tm_pending_requests(direction, status)',
-    );
+    await conn.execute('CREATE INDEX IF NOT EXISTS idx_tm_pending_direction ON tm_pending_requests(direction, status)');
 
     // 5. CONVERSATIONS
     await conn.execute('''
@@ -402,12 +374,8 @@ class PostgresService {
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )
     ''');
-    await conn.execute(
-      'CREATE INDEX IF NOT EXISTS idx_tm_conversations_type ON tm_conversations(type)',
-    );
-    await conn.execute(
-      'CREATE INDEX IF NOT EXISTS idx_tm_conversations_last_msg ON tm_conversations(last_message_at DESC)',
-    );
+    await conn.execute('CREATE INDEX IF NOT EXISTS idx_tm_conversations_type ON tm_conversations(type)');
+    await conn.execute('CREATE INDEX IF NOT EXISTS idx_tm_conversations_last_msg ON tm_conversations(last_message_at DESC)');
 
     // 6. MESSAGES
     await conn.execute('''
@@ -443,12 +411,8 @@ class PostgresService {
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )
     ''');
-    await conn.execute(
-      'CREATE INDEX IF NOT EXISTS idx_tm_messages_conversation ON tm_messages(conversation_id, received_at DESC)',
-    );
-    await conn.execute(
-      'CREATE INDEX IF NOT EXISTS idx_tm_messages_unread ON tm_messages(conversation_id, is_read) WHERE is_read = FALSE',
-    );
+    await conn.execute('CREATE INDEX IF NOT EXISTS idx_tm_messages_conversation ON tm_messages(conversation_id, received_at DESC)');
+    await conn.execute('CREATE INDEX IF NOT EXISTS idx_tm_messages_unread ON tm_messages(conversation_id, is_read) WHERE is_read = FALSE');
 
     // 7. OUTGOING QUEUE
     await conn.execute('''
@@ -471,9 +435,7 @@ class PostgresService {
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )
     ''');
-    await conn.execute(
-      'CREATE INDEX IF NOT EXISTS idx_tm_queue_status ON tm_outgoing_queue(status, next_attempt_at)',
-    );
+    await conn.execute('CREATE INDEX IF NOT EXISTS idx_tm_queue_status ON tm_outgoing_queue(status, next_attempt_at)');
 
     // 8. GROUPS
     await conn.execute('''
@@ -602,7 +564,6 @@ class PostgresService {
     ''');
 
     // 13. PL/PGSQL TRIGGER (Presence Notify)
-    // Needs to be generated safely
     await conn.execute('''
       CREATE OR REPLACE FUNCTION notify_presence_change()
       RETURNS TRIGGER AS \$\$
@@ -622,15 +583,404 @@ class PostgresService {
       \$\$ LANGUAGE plpgsql
     ''');
 
-    await conn.execute(
-      'DROP TRIGGER IF EXISTS tm_presence_notify ON tm_presence',
-    );
-
+    await conn.execute('DROP TRIGGER IF EXISTS tm_presence_notify ON tm_presence');
     await conn.execute('''
       CREATE TRIGGER tm_presence_notify
         AFTER INSERT OR UPDATE ON tm_presence
         FOR EACH ROW EXECUTE FUNCTION notify_presence_change()
     ''');
+
+    // -------------------------------------------------------------------------
+    // 🚀 PART D: GUPTIK PLAYER (MEDIA ECOSYSTEM)
+    // -------------------------------------------------------------------------
+    
+    await conn.execute('''
+      CREATE TABLE IF NOT EXISTS mp_channels (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        channel_id TEXT NOT NULL UNIQUE,
+        user_id UUID NOT NULL,
+        channel_name TEXT NOT NULL,
+        bio TEXT DEFAULT '',
+        avatar_path TEXT,
+        banner_path TEXT,
+        subscriber_count INTEGER DEFAULT 0,
+        total_views INTEGER DEFAULT 0,
+        verified BOOLEAN DEFAULT FALSE,
+        location TEXT DEFAULT '',
+        language TEXT DEFAULT 'en',
+        category_tags TEXT[] DEFAULT '{}',
+        monetization_enabled BOOLEAN DEFAULT FALSE,
+        stripe_connected BOOLEAN DEFAULT FALSE,
+        payout_email TEXT,
+        total_earnings_local DECIMAL DEFAULT 0,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    ''');
+
+    
+
+    await conn.execute('''
+      CREATE TABLE IF NOT EXISTS mp_videos (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        channel_id TEXT NOT NULL REFERENCES mp_channels(channel_id),
+        title TEXT NOT NULL,
+        description TEXT DEFAULT '',
+        tags TEXT[] DEFAULT '{}',
+        creator_tags TEXT[] DEFAULT '{}',
+        community_tags TEXT[] DEFAULT '{}',
+        file_path TEXT NOT NULL,
+        thumbnail_path TEXT,
+        preview_gif_path TEXT,
+        upload_timestamp TIMESTAMPTZ DEFAULT NOW(),
+        duration_seconds INTEGER,
+        qualities JSONB DEFAULT '{}',
+        language TEXT DEFAULT 'en',
+        location TEXT,
+        visibility TEXT DEFAULT 'public',
+        is_reel BOOLEAN DEFAULT FALSE,
+        is_live BOOLEAN DEFAULT FALSE,
+        live_start_timestamp TIMESTAMPTZ,
+        live_ended_timestamp TIMESTAMPTZ,
+        category TEXT,
+        age_rating TEXT DEFAULT 'all',
+        copyright_info TEXT,
+        monetization_enabled BOOLEAN DEFAULT FALSE,
+        sticker_products JSONB DEFAULT '[]',
+        sticker_services JSONB DEFAULT '[]',
+        view_count_local INTEGER DEFAULT 0,
+        like_count_local INTEGER DEFAULT 0,
+        repost_count_local INTEGER DEFAULT 0,
+        save_count_local INTEGER DEFAULT 0,
+        comment_count_local INTEGER DEFAULT 0,
+        share_count_local INTEGER DEFAULT 0,
+        playlist_count_local INTEGER DEFAULT 0,
+        reaction_heart_count INTEGER DEFAULT 0,
+        reaction_fire_count INTEGER DEFAULT 0,
+        reaction_thumbs_up_count INTEGER DEFAULT 0,
+        reaction_clap_count INTEGER DEFAULT 0,
+        reaction_laugh_count INTEGER DEFAULT 0,
+        reaction_surprised_count INTEGER DEFAULT 0,
+        reaction_sad_count INTEGER DEFAULT 0,
+        average_watch_percentage DECIMAL DEFAULT 0,
+        unique_viewers_local INTEGER DEFAULT 0,
+        is_deleted BOOLEAN DEFAULT FALSE,
+        deleted_at TIMESTAMPTZ
+      )
+    ''');
+    await conn.execute('CREATE INDEX IF NOT EXISTS idx_mp_videos_channel ON mp_videos(channel_id)');
+    await conn.execute('CREATE INDEX IF NOT EXISTS idx_mp_videos_upload ON mp_videos(upload_timestamp DESC)');
+
+    // -------------------------------------------------------------
+    // 🚀 CHANNEL SUBSCRIPTIONS TRACKER
+    // -------------------------------------------------------------
+    await conn.execute('''
+      CREATE TABLE IF NOT EXISTS mp_channel_subscriptions (
+        subscriber_uid TEXT,
+        channel_id TEXT,
+        PRIMARY KEY (subscriber_uid, channel_id)
+      )
+    ''');
+
+    await conn.execute('''
+      CREATE TABLE IF NOT EXISTS mp_video_versions (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        video_id UUID NOT NULL REFERENCES mp_videos(id),
+        quality TEXT NOT NULL,
+        format TEXT DEFAULT 'mp4',
+        file_size BIGINT,
+        storage_path TEXT NOT NULL,
+        transcoded_at TIMESTAMPTZ DEFAULT NOW(),
+        UNIQUE(video_id, quality)
+      )
+    ''');
+
+    await conn.execute('''
+      CREATE TABLE IF NOT EXISTS mp_upload_queue (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        video_id UUID REFERENCES mp_videos(id),
+        status TEXT DEFAULT 'pending',
+        progress_percent DECIMAL DEFAULT 0,
+        error_log TEXT,
+        retry_count INTEGER DEFAULT 0,
+        max_retries INTEGER DEFAULT 5,
+        started_at TIMESTAMPTZ DEFAULT NOW(),
+        completed_at TIMESTAMPTZ
+      )
+    ''');
+
+    await conn.execute('''
+      CREATE TABLE IF NOT EXISTS mp_sticker_products_catalog (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        video_id UUID NOT NULL REFERENCES mp_videos(id),
+        product_id TEXT NOT NULL UNIQUE,
+        timestamp_in_video DECIMAL NOT NULL,
+        clickable_zone JSONB,
+        product_name TEXT NOT NULL,
+        price DECIMAL,
+        currency TEXT DEFAULT 'USD',
+        description TEXT,
+        link_url TEXT,
+        image_path TEXT,
+        stock_status TEXT DEFAULT 'in_stock',
+        sales_count_local INTEGER DEFAULT 0,
+        click_count_local INTEGER DEFAULT 0,
+        purchase_initiated_count INTEGER DEFAULT 0,
+        purchase_completed_count INTEGER DEFAULT 0,
+        is_active BOOLEAN DEFAULT TRUE,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    ''');
+
+    await conn.execute('''
+      CREATE TABLE IF NOT EXISTS mp_sticker_services_catalog (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        video_id UUID NOT NULL REFERENCES mp_videos(id),
+        service_id TEXT NOT NULL UNIQUE,
+        timestamp_in_video DECIMAL NOT NULL,
+        clickable_zone JSONB,
+        service_name TEXT NOT NULL,
+        price DECIMAL,
+        currency TEXT DEFAULT 'USD',
+        description TEXT,
+        availability_slots JSONB DEFAULT '[]',
+        booking_count_local INTEGER DEFAULT 0,
+        is_active BOOLEAN DEFAULT TRUE,
+        trustme_message_template TEXT,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    ''');
+
+    await conn.execute('''
+      CREATE TABLE IF NOT EXISTS mp_playlists (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        channel_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        description TEXT DEFAULT '',
+        is_public BOOLEAN DEFAULT TRUE,
+        cover_image_path TEXT,
+        video_count INTEGER DEFAULT 0,
+        total_duration_seconds INTEGER DEFAULT 0,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    ''');
+
+    await conn.execute('''
+      CREATE TABLE IF NOT EXISTS mp_playlist_videos (
+        playlist_id UUID NOT NULL REFERENCES mp_playlists(id),
+        video_id UUID NOT NULL REFERENCES mp_videos(id),
+        position INTEGER NOT NULL DEFAULT 0,
+        added_at TIMESTAMPTZ DEFAULT NOW(),
+        PRIMARY KEY (playlist_id, video_id)
+      )
+    ''');
+
+    await conn.execute('''
+      CREATE TABLE IF NOT EXISTS mp_draft_videos (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        channel_id TEXT NOT NULL,
+        title TEXT,
+        description TEXT,
+        tags TEXT[] DEFAULT '{}',
+        file_path_temp TEXT,
+        thumbnail_temp_path TEXT,
+        last_edited_at TIMESTAMPTZ DEFAULT NOW(),
+        schedule_publish_at TIMESTAMPTZ,
+        cross_post_platforms TEXT[] DEFAULT '{}',
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    ''');
+
+    await conn.execute('''
+      CREATE TABLE IF NOT EXISTS mp_cross_post_status (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        video_id TEXT NOT NULL,
+        platform TEXT NOT NULL,
+        post_type TEXT,
+        platform_post_id TEXT,
+        status TEXT DEFAULT 'pending',
+        error_message TEXT,
+        published_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    ''');
+
+    await conn.execute('''
+      CREATE TABLE IF NOT EXISTS mp_watch_history (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        video_id TEXT NOT NULL,
+        creator_channel_id TEXT NOT NULL,
+        creator_uid TEXT,
+        watch_timestamp TIMESTAMPTZ DEFAULT NOW(),
+        watch_duration_seconds INTEGER DEFAULT 0,
+        percent_completed DECIMAL DEFAULT 0,
+        device_type TEXT DEFAULT 'desktop',
+        paused_count INTEGER DEFAULT 0,
+        rewind_count INTEGER DEFAULT 0,
+        speed_changes INTEGER DEFAULT 0,
+        quality_watched TEXT DEFAULT 'auto',
+        completed BOOLEAN DEFAULT FALSE,
+        session_id TEXT NOT NULL,
+        is_incognito BOOLEAN DEFAULT FALSE
+      )
+    ''');
+    await conn.execute('CREATE INDEX IF NOT EXISTS idx_mp_watch_history_video ON mp_watch_history(video_id)');
+
+    await conn.execute('''
+      CREATE TABLE IF NOT EXISTS mp_watch_history_tags (
+        history_id UUID NOT NULL REFERENCES mp_watch_history(id),
+        tag TEXT NOT NULL,
+        weight DECIMAL DEFAULT 1.0,
+        PRIMARY KEY (history_id, tag)
+      )
+    ''');
+
+
+    await conn.execute('''
+      CREATE TABLE IF NOT EXISTS mp_liked_videos (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        video_id TEXT NOT NULL,
+        creator_uid TEXT,
+        liked_timestamp TIMESTAMPTZ DEFAULT NOW(),
+        reaction_type TEXT NOT NULL DEFAULT 'heart',
+        is_incognito BOOLEAN DEFAULT FALSE
+      )
+    ''');
+
+    // -------------------------------------------------------------
+      // 🚀 THE GATEKEEPER: Unique Video Views Tracker
+      // Prevents the same user from spamming views on a single video
+      // -------------------------------------------------------------
+      await conn.execute('''
+        CREATE TABLE IF NOT EXISTS mp_viewed_videos (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          video_id TEXT NOT NULL,
+          viewer_uid TEXT NOT NULL,
+          viewed_at TIMESTAMPTZ DEFAULT NOW(),
+          UNIQUE(video_id, viewer_uid) -- This forces 1 view per person!
+        )
+      ''');
+
+    await conn.execute('''
+      CREATE TABLE IF NOT EXISTS mp_commented_videos (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        video_id TEXT NOT NULL,
+        creator_uid TEXT,
+        comment_text TEXT NOT NULL,
+        comment_timestamp TIMESTAMPTZ DEFAULT NOW(),
+        parent_comment_id UUID,
+        likes_on_comment_local INTEGER DEFAULT 0,
+        reaction_heart INTEGER DEFAULT 0,
+        reaction_laugh INTEGER DEFAULT 0,
+        reaction_agree INTEGER DEFAULT 0,
+        reaction_disagree INTEGER DEFAULT 0,
+        routed_to_trustme BOOLEAN DEFAULT FALSE,
+        is_incognito BOOLEAN DEFAULT FALSE
+      )
+    ''');
+
+    await conn.execute('''
+      CREATE TABLE IF NOT EXISTS mp_saved_videos (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        video_id TEXT NOT NULL,
+        creator_uid TEXT,
+        saved_timestamp TIMESTAMPTZ DEFAULT NOW(),
+        folder_name TEXT DEFAULT 'Default',
+        is_incognito BOOLEAN DEFAULT FALSE
+      )
+    ''');
+
+    await conn.execute('''
+      CREATE TABLE IF NOT EXISTS mp_shared_videos (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        video_id TEXT NOT NULL,
+        creator_uid TEXT,
+        shared_timestamp TIMESTAMPTZ DEFAULT NOW(),
+        share_method TEXT DEFAULT 'link',
+        share_timestamp_in_video DECIMAL,
+        recipient_uids TEXT[] DEFAULT '{}',
+        opened_by_receiver BOOLEAN DEFAULT FALSE,
+        is_incognito BOOLEAN DEFAULT FALSE
+      )
+    ''');
+
+    await conn.execute('''
+      CREATE TABLE IF NOT EXISTS mp_recommendation_profile (
+        user_id UUID PRIMARY KEY,
+        top_categories JSONB DEFAULT '{}',
+        top_tags JSONB DEFAULT '{}',
+        preferred_languages TEXT[] DEFAULT '{en}',
+        location_bias TEXT,
+        time_of_day_patterns JSONB DEFAULT '{}',
+        ollama_embedding_vector DECIMAL[],
+        last_ollama_training_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    ''');
+
+    await conn.execute('''
+      CREATE TABLE IF NOT EXISTS mp_live_stream_sessions (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        video_id TEXT NOT NULL UNIQUE,
+        channel_id TEXT NOT NULL,
+        webrtc_offer TEXT,
+        webrtc_candidates JSONB DEFAULT '[]',
+        viewer_count INTEGER DEFAULT 0,
+        started_at TIMESTAMPTZ DEFAULT NOW(),
+        ended_at TIMESTAMPTZ,
+        total_watch_time_seconds INTEGER DEFAULT 0,
+        total_messages INTEGER DEFAULT 0,
+        total_gifts INTEGER DEFAULT 0,
+        is_active BOOLEAN DEFAULT TRUE
+      )
+    ''');
+
+    await conn.execute('''
+      CREATE TABLE IF NOT EXISTS tm_call_log (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        call_id TEXT NOT NULL UNIQUE,
+        contact_guptik_id TEXT NOT NULL,
+        contact_username TEXT,
+        call_type TEXT NOT NULL DEFAULT 'video',
+        direction TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'ringing',
+        sdp_offer TEXT,
+        sdp_answer TEXT,
+        ice_candidates JSONB DEFAULT '[]',
+        webrtc_session_state TEXT,
+        started_at TIMESTAMPTZ,
+        answered_at TIMESTAMPTZ,
+        ended_at TIMESTAMPTZ,
+        duration_seconds INTEGER DEFAULT 0,
+        call_quality TEXT DEFAULT 'good',
+        is_muted_local BOOLEAN DEFAULT FALSE,
+        is_video_off_local BOOLEAN DEFAULT FALSE,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    ''');
+
+    // Reaction Trigger (Creator Side Aggregation)
+    await conn.execute('''
+      CREATE OR REPLACE FUNCTION update_reaction_counts()
+      RETURNS TRIGGER AS \$\$
+      BEGIN
+          UPDATE mp_videos SET
+              reaction_heart_count = (SELECT COUNT(*) FROM mp_liked_videos WHERE video_id = NEW.video_id AND reaction_type = 'heart'),
+              reaction_fire_count = (SELECT COUNT(*) FROM mp_liked_videos WHERE video_id = NEW.video_id AND reaction_type = 'fire'),
+              reaction_thumbs_up_count = (SELECT COUNT(*) FROM mp_liked_videos WHERE video_id = NEW.video_id AND reaction_type = 'thumbs_up'),
+              reaction_clap_count = (SELECT COUNT(*) FROM mp_liked_videos WHERE video_id = NEW.video_id AND reaction_type = 'clap'),
+              reaction_laugh_count = (SELECT COUNT(*) FROM mp_liked_videos WHERE video_id = NEW.video_id AND reaction_type = 'laugh'),
+              reaction_surprised_count = (SELECT COUNT(*) FROM mp_liked_videos WHERE video_id = NEW.video_id AND reaction_type = 'surprised'),
+              reaction_sad_count = (SELECT COUNT(*) FROM mp_liked_videos WHERE video_id = NEW.video_id AND reaction_type = 'sad')
+          WHERE id = NEW.video_id::UUID;
+          RETURN NEW;
+      END;
+      \$\$ LANGUAGE plpgsql
+    ''');
+
   }
 
   // ==============================================================================

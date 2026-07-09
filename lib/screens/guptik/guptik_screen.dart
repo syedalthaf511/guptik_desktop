@@ -4,9 +4,6 @@ import 'package:uuid/uuid.dart';
 import '../../services/external/postgres_service.dart';
 import '../../services/external/ollama_service.dart';
 
-
-
-
 class GuptikScreen extends StatefulWidget {
   const GuptikScreen({super.key});
 
@@ -33,12 +30,21 @@ class _GuptikScreenState extends State<GuptikScreen> {
     _loadModels();
   }
 
+  // 🚀 FIX 1: Smarter model loading so it doesn't overwrite your current selection!
   Future<void> _loadModels() async {
     final models = await OllamaService().getLocalModels();
+    // Ensure we have absolutely no duplicates to prevent dropdown crashes
+    final uniqueModels = models.toSet().toList(); 
+
     if (mounted) {
       setState(() {
-        _availableModels = models;
-        if (models.isNotEmpty) _currentModel = models.first;
+        _availableModels = uniqueModels;
+        
+        // Only select the first model IF we don't have one selected,
+        // or if the one we had selected was deleted.
+        if (_currentModel == null || !uniqueModels.contains(_currentModel)) {
+          _currentModel = uniqueModels.isNotEmpty ? uniqueModels.first : null;
+        }
       });
     }
   }
@@ -95,9 +101,8 @@ class _GuptikScreenState extends State<GuptikScreen> {
 
     // 3. Stream Response
     try {
-      // Pass only role/content to Ollama, not the UI extras
       final historyForAi = _messages
-          .sublist(0, _messages.length - 1) // Exclude placeholder
+          .sublist(0, _messages.length - 1) 
           .map((m) => {'role': m['role']!, 'content': m['content']!})
           .toList();
 
@@ -120,7 +125,6 @@ class _GuptikScreenState extends State<GuptikScreen> {
         model: _currentModel!,
       );
 
-      // Refresh sidebar if this was a new chat
       _loadSessions();
 
     } catch (e) {
@@ -140,6 +144,114 @@ class _GuptikScreenState extends State<GuptikScreen> {
         );
       }
     });
+  }
+
+  void _showPullModelDialog() {
+    final TextEditingController modelNameController = TextEditingController();
+    bool isPulling = false;
+    String pullStatus = '';
+
+    showDialog(
+      context: context,
+      barrierDismissible: false, 
+      builder: (dialogCtx) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              backgroundColor: const Color(0xFF1E293B),
+              title: const Row(
+                children: [
+                  Icon(Icons.cloud_download, color: Colors.cyanAccent),
+                  SizedBox(width: 10),
+                  Text("Pull New AI Model", style: TextStyle(color: Colors.white, fontSize: 18)),
+                ],
+              ),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text("Enter an Ollama model tag (e.g., 'phi3', 'mistral', 'llama3:8b')", style: TextStyle(color: Colors.grey, fontSize: 13)),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: modelNameController,
+                    enabled: !isPulling, 
+                    style: const TextStyle(color: Colors.white),
+                    decoration: InputDecoration(
+                      filled: true,
+                      fillColor: Colors.black26,
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide.none),
+                      hintText: "Model name...",
+                      hintStyle: TextStyle(color: Colors.grey.shade600),
+                    ),
+                  ),
+                  if (pullStatus.isNotEmpty) ...[
+                    const SizedBox(height: 16),
+                    Text(pullStatus, style: TextStyle(
+                      color: pullStatus.startsWith("Error") ? Colors.redAccent : Colors.cyanAccent, 
+                      fontWeight: FontWeight.bold,
+                      fontSize: 12,
+                    )),
+                    if (isPulling)
+                      const Padding(
+                        padding: EdgeInsets.only(top: 8.0),
+                        child: LinearProgressIndicator(color: Colors.cyanAccent, backgroundColor: Colors.black26),
+                      ),
+                  ]
+                ],
+              ),
+              actions: [
+                if (!isPulling)
+                  TextButton(
+                    onPressed: () => Navigator.pop(dialogCtx),
+                    child: const Text("Cancel", style: TextStyle(color: Colors.grey)),
+                  ),
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(backgroundColor: Colors.cyanAccent),
+                  onPressed: isPulling ? null : () async {
+                    final modelName = modelNameController.text.trim().toLowerCase();
+                    if (modelName.isEmpty) return;
+
+                    setDialogState(() {
+                      isPulling = true;
+                      pullStatus = "Connecting to Ollama...";
+                    });
+
+                    await for (String status in OllamaService().pullModel(modelName)) {
+                      setDialogState(() => pullStatus = status);
+                      
+                      if (status == "Success") {
+                        // Reload the fresh list from Ollama
+                        await _loadModels();
+                        
+                        // 🚀 FIX 2: Safely check if Ollama appended ':latest' to the name you typed!
+                        setState(() {
+                          if (_availableModels.contains(modelName)) {
+                            _currentModel = modelName;
+                          } else if (_availableModels.contains('$modelName:latest')) {
+                            _currentModel = '$modelName:latest';
+                          } else if (_availableModels.isNotEmpty) {
+                            _currentModel = _availableModels.first; // Fallback to safe known model
+                          }
+                        });
+                        
+                        if (dialogCtx.mounted) {
+                          Navigator.pop(dialogCtx);
+                        }
+                        break;
+                      } else if (status.startsWith("Error")) {
+                        setDialogState(() => isPulling = false);
+                        break;
+                      }
+                    }
+                  },
+                  child: Text(isPulling ? "Downloading..." : "Pull Model", style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
   }
 
   @override
@@ -225,14 +337,40 @@ class _GuptikScreenState extends State<GuptikScreen> {
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
                     const Text("GUPTIK NEURAL", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                    
                     DropdownButton<String>(
                       value: _currentModel,
                       dropdownColor: const Color(0xFF1E293B),
                       underline: Container(),
                       icon: const Icon(Icons.arrow_drop_down, color: Colors.cyanAccent),
                       style: const TextStyle(color: Colors.cyanAccent, fontFamily: 'Courier'),
-                      items: _availableModels.map((m) => DropdownMenuItem(value: m, child: Text(m))).toList(),
-                      onChanged: (val) => setState(() => _currentModel = val),
+                      
+                      hint: const Text("Select a Model", style: TextStyle(color: Colors.cyanAccent)),
+                      
+                      items: [
+                        ..._availableModels.map((m) => DropdownMenuItem<String>(
+                          value: m, 
+                          child: Text(m)
+                        )),
+                        
+                        const DropdownMenuItem<String>(
+                          value: '---pull_new---',
+                          child: Row(
+                            children: [
+                              Icon(Icons.download, color: Colors.greenAccent, size: 16),
+                              SizedBox(width: 8),
+                              Text("Add New Model", style: TextStyle(color: Colors.greenAccent)),
+                            ],
+                          ),
+                        ),
+                      ],
+                      onChanged: (val) {
+                        if (val == '---pull_new---') {
+                          _showPullModelDialog();
+                        } else {
+                          setState(() => _currentModel = val);
+                        }
+                      },
                     ),
                   ],
                 ),

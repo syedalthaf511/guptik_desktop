@@ -1,11 +1,24 @@
 import 'package:flutter/material.dart';
 import 'package:lucide_icons/lucide_icons.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:window_manager/window_manager.dart';
 import '../../models/home.dart';
 import '../../models/room.dart';
 import '../../models/board.dart';
 import '../../models/switch.dart' as smart_switch;
 import '../../services/supabase_service.dart';
 import '../../utils/management_dialogs.dart';
+import 'dashboard_home_screen.dart';
+import '../settings/settings_screen.dart';
+import '../guptik/guptik_screen.dart';
+import '../vault/vault_screen.dart';
+import '../mediaplayer/desktop_media_home_screen.dart';
+import '../trust_me/trust_me_screen.dart';
+import '../facebook/meta_dashboard.dart';
+import '../whatsapp/whatsapp_screen.dart';
+import '../datatables/datatables_screen.dart';
+import '../../services/external/postgres_service.dart';
+import 'dart:io';
 
 class HomeControlScreen extends StatefulWidget {
   const HomeControlScreen({super.key});
@@ -14,16 +27,46 @@ class HomeControlScreen extends StatefulWidget {
   State<HomeControlScreen> createState() => _HomeControlScreenState();
 }
 
-class _HomeControlScreenState extends State<HomeControlScreen> {
+class _HomeControlScreenState extends State<HomeControlScreen> with SingleTickerProviderStateMixin {
   late final SupabaseService _supabaseService;
   late Future<List<Home>> _homesFuture;
   Home? _selectedHome;
+  late TabController _tabController;
+  String _gatewayUrl = "localhost:55000"; // Default value
 
   @override
   void initState() {
     super.initState();
     _supabaseService = SupabaseService();
     _homesFuture = _supabaseService.getHomes();
+    _tabController = TabController(length: 10, vsync: this);
+    _loadGatewayUrl();
+  }
+
+  Future<void> _loadGatewayUrl() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      String? storedUrl = prefs.getString('public_url');
+      
+      if (storedUrl != null && storedUrl.isNotEmpty) {
+        // Remove protocol and trailing slash if present
+        storedUrl = storedUrl.replaceAll('https://', '').replaceAll('http://', '');
+        if (storedUrl.endsWith('/')) storedUrl = storedUrl.substring(0, storedUrl.length - 1);
+        
+        // Set to localhost for local access
+        setState(() {
+          _gatewayUrl = "localhost:55000";
+        });
+      }
+    } catch (e) {
+      debugPrint("Error loading gateway URL: $e");
+    }
+  }
+
+  @override
+  void dispose() {
+    _tabController.dispose();
+    super.dispose();
   }
 
   void _showAddRoomDialog(String homeId) {
@@ -121,6 +164,75 @@ class _HomeControlScreenState extends State<HomeControlScreen> {
 
   @override
   Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        backgroundColor: const Color(0xFF1E293B),
+        title: Row(
+          children: [
+            Image.asset('lib/assets/logonobg.png', height: 30),
+            const SizedBox(width: 10),
+            const Text('Guptik Desktop', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            const SizedBox(width: 10),
+            const Text('v0.1.0', style: TextStyle(fontSize: 12, color: Colors.grey)),
+          ],
+        ),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.minimize, color: Colors.white),
+            onPressed: () => windowManager.minimize(),
+          ),
+          IconButton(
+            icon: const Icon(Icons.check_box_outline_blank, color: Colors.white),
+            onPressed: () async {
+              bool isMaximized = await windowManager.isMaximized();
+              if (isMaximized) {
+                windowManager.unmaximize();
+              } else {
+                windowManager.maximize();
+              }
+            },
+          ),
+          IconButton(
+            icon: const Icon(Icons.close, color: Colors.white),
+            onPressed: () => windowManager.close(),
+          ),
+        ],
+        bottom: TabBar(
+          controller: _tabController,
+          isScrollable: true,
+          tabs: const [
+            Tab(icon: Icon(LucideIcons.grid), text: 'Dashboard'),
+            Tab(icon: Icon(LucideIcons.home), text: 'Home Control'),
+            Tab(icon: Icon(LucideIcons.settings), text: 'Settings'),
+            Tab(icon: Icon(LucideIcons.bot), text: 'Guptik AI'),
+            Tab(icon: Icon(LucideIcons.shield), text: 'Vault'),
+            Tab(icon: Icon(LucideIcons.play), text: 'Media Player'),
+            Tab(icon: Icon(LucideIcons.lock), text: 'Trust Me'),
+            Tab(icon: Icon(LucideIcons.facebook), text: 'Meta Manager'),
+            Tab(icon: Icon(LucideIcons.messageCircle), text: 'WhatsApp'),
+            Tab(icon: Icon(LucideIcons.table, size: 24, color: Colors.cyanAccent), text: 'Data Tables'),
+          ],
+        ),
+      ),
+      body: TabBarView(
+        controller: _tabController,
+        children: [
+          const DashboardHomeScreen(),
+          _buildHomeContentWithSidebar(),
+          const SettingsScreen(),
+          const GuptikScreen(),
+          const VaultScreen(),
+          DesktopMediaHomeScreen(gatewayUrl: _gatewayUrl),
+          const TrustMeScreen(),
+          const MetaDashboard(),
+          const WhatsAppScreen(),
+          const DatatablesScreen(),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildHomeContentWithSidebar() {
     return FutureBuilder<List<Home>>(
       future: _homesFuture,
       builder: (context, snapshot) {
