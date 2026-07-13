@@ -35,6 +35,12 @@ class _DesktopUploadScreenState extends State<DesktopUploadScreen> {
   bool _isReel = false;
   bool _isMonetized = false;
 
+  // 🚀 AUDIENCE SECTION
+  // "Made for kids" — YouTube-style two-option choice.
+  bool _madeForKids = false;
+  // Age restriction — restrict to viewers over 18.
+  bool _ageRestricted = false;
+
   @override
   void initState() {
     super.initState();
@@ -207,6 +213,8 @@ class _DesktopUploadScreenState extends State<DesktopUploadScreen> {
       visibility: _selectedVisibility,
       isReel: _isReel,
       isMonetized: _isMonetized,
+      madeForKids: _madeForKids,
+      ageRestricted: _ageRestricted,
       channelName: _channelNameController.text.trim(), 
     );
 
@@ -335,6 +343,57 @@ class _DesktopUploadScreenState extends State<DesktopUploadScreen> {
                           value: _isMonetized,
                           onChanged: (val) => setState(() => _isMonetized = val),
                         ),
+
+                        // 🚀 AUDIENCE SECTION (YouTube-style)
+                        const SizedBox(height: 24),
+                        const Divider(color: Colors.white12),
+                        const SizedBox(height: 16),
+                        const Text("Audience", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+                        const SizedBox(height: 6),
+                        const Text(
+                          "Choose the audience for this video. This helps us recommend it to the right viewers.",
+                          style: TextStyle(color: Colors.grey, fontSize: 12),
+                        ),
+                        const SizedBox(height: 16),
+
+                        // Made for kids
+                        _buildAudienceOption(
+                          title: "Yes, it's made for kids",
+                          subtitle: "Content aimed primarily at children.",
+                          selected: _madeForKids,
+                          onTap: () => setState(() => _madeForKids = true),
+                        ),
+                        const SizedBox(height: 10),
+                        _buildAudienceOption(
+                          title: "No, it's not made for kids",
+                          subtitle: "Content not targeted at children.",
+                          selected: !_madeForKids,
+                          onTap: () => setState(() => _madeForKids = false),
+                        ),
+
+                        const SizedBox(height: 24),
+                        const Text("Age restriction", style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+                        const SizedBox(height: 6),
+                        const Text(
+                          "Set an age restriction if your video may not be appropriate for all ages.",
+                          style: TextStyle(color: Colors.grey, fontSize: 12),
+                        ),
+                        const SizedBox(height: 16),
+
+                        // Age restriction
+                        _buildAudienceOption(
+                          title: "Yes, restrict my video to viewers over 18",
+                          subtitle: "Only signed-in viewers aged 18+ can watch.",
+                          selected: _ageRestricted,
+                          onTap: () => setState(() => _ageRestricted = true),
+                        ),
+                        const SizedBox(height: 10),
+                        _buildAudienceOption(
+                          title: "No, don't restrict my video to viewers over 18 only",
+                          subtitle: "Anyone can watch this video.",
+                          selected: !_ageRestricted,
+                          onTap: () => setState(() => _ageRestricted = false),
+                        ),
                       ],
                     ),
                   ),
@@ -406,6 +465,50 @@ class _DesktopUploadScreenState extends State<DesktopUploadScreen> {
           ),
         ),
       ],
+    );
+  }
+
+  // 🚀 AUDIENCE OPTION: a YouTube-style selectable radio row used for the
+  // "made for kids" and "age restriction" choices.
+  Widget _buildAudienceOption({
+    required String title,
+    required String subtitle,
+    required bool selected,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(10),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        decoration: BoxDecoration(
+          color: selected ? const Color(0xFFD4AF37).withAlpha(20) : const Color(0xFF0F172A),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(
+            color: selected ? const Color(0xFFD4AF37) : Colors.white24,
+          ),
+        ),
+        child: Row(
+          children: [
+            Icon(
+              selected ? Icons.radio_button_checked : Icons.radio_button_off,
+              color: selected ? const Color(0xFFD4AF37) : Colors.grey,
+              size: 20,
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(title, style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w600)),
+                  const SizedBox(height: 2),
+                  Text(subtitle, style: const TextStyle(color: Colors.grey, fontSize: 12)),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

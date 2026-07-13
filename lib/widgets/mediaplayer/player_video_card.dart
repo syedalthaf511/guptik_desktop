@@ -64,6 +64,52 @@ class _PlayerVideoCardState extends State<PlayerVideoCard> {
     }
   }
 
+  // 🚀 AUDIENCE BADGES: YouTube-style "Made for Kids" + "18+" indicators.
+  List<Widget> _buildAudienceBadges() {
+    final badges = <Widget>[];
+    if (widget.video.madeForKids) {
+      badges.add(
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+          decoration: BoxDecoration(
+            color: const Color(0xFF00E5FF).withAlpha(25),
+            borderRadius: BorderRadius.circular(4),
+            border: Border.all(color: const Color(0xFF00E5FF).withAlpha(120)),
+          ),
+          child: const Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.child_care, size: 11, color: Color(0xFF00E5FF)),
+              SizedBox(width: 3),
+              Text('Made for Kids', style: TextStyle(color: Color(0xFF00E5FF), fontSize: 10, fontWeight: FontWeight.w600)),
+            ],
+          ),
+        ),
+      );
+    }
+    if (widget.video.ageRating == '18+') {
+      badges.add(
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+          decoration: BoxDecoration(
+            color: Colors.redAccent.withAlpha(25),
+            borderRadius: BorderRadius.circular(4),
+            border: Border.all(color: Colors.redAccent.withAlpha(140)),
+          ),
+          child: const Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.warning_amber_rounded, size: 11, color: Colors.redAccent),
+              SizedBox(width: 3),
+              Text('18+', style: TextStyle(color: Colors.redAccent, fontSize: 10, fontWeight: FontWeight.w700)),
+            ],
+          ),
+        ),
+      );
+    }
+    return badges;
+  }
+
   @override
   Widget build(BuildContext context) {
     final isReel = widget.video.isReel;
@@ -194,6 +240,15 @@ class _PlayerVideoCardState extends State<PlayerVideoCard> {
                                         style: TextStyle(color: Colors.grey.shade500, fontSize: 11)),
                                   ],
                                 ],
+                              ),
+                            ],
+                            // 🚀 AUDIENCE BADGES (Made for Kids / 18+)
+                            if (widget.video.madeForKids || widget.video.ageRating == '18+') ...[
+                              const SizedBox(height: 6),
+                              Wrap(
+                                spacing: 6,
+                                runSpacing: 4,
+                                children: _buildAudienceBadges(),
                               ),
                             ],
                           ],

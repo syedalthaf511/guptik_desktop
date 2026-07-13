@@ -58,41 +58,45 @@ class TrustMeService {
 
     final data = jsonDecode(response.body) as Map<String, dynamic>;
     final code = data['code'];
+    if (code == null) {
+      throw Exception('Handshake generation failed: server returned no code.');
+    }
 
     try {
       final supabase = Supabase.instance.client;
       final user = supabase.auth.currentUser;
-      final userId = user?.id;
-
-      if (userId != null) {
-        const secureStorage = FlutterSecureStorage();
-        
-        // 🚀 Fetch display name directly from Supabase Auth
-        final authName = user?.userMetadata?['display_name'] ?? 
-                         user?.userMetadata?['name'] ?? 
-                         user?.userMetadata?['full_name'];
-                         
-        final myUsername = authName ?? await secureStorage.read(key: 'current_username') ?? 'Peer_A';
-
-        final mySignedPreKeyId =
-            await secureStorage.read(key: 'my_signed_prekey_id') ?? '0';
-
-        // 1. Upload Node A's details to Supabase (matching new schema)
-        await supabase.from('trust_me_secure_invites').insert({
-          'creator_id': userId,
-          'invite_code': code,
-          'creator_username': myUsername,
-          // creator_cloudflare_url, creator_identity_pubkey, and creator_signed_prekey removed as per new schema
-          'creator_signed_prekey_id': int.tryParse(mySignedPreKeyId) ?? 0,
-        });
-
-        print("✅ Invite logged. Launching Background Radar...");
-
-        // Start radar in the background so it doesn't freeze the app!
-        _startActiveRadar(code);
+      if (user == null) {
+        throw Exception('Please sign in before generating a handshake code.');
       }
+      final userId = user.id;
+
+      const secureStorage = FlutterSecureStorage();
+      
+      // 🚀 Fetch display name directly from Supabase Auth
+      final authName = user.userMetadata?['display_name'] ??
+                       user.userMetadata?['name'] ??
+                       user.userMetadata?['full_name'];
+
+      final myUsername = authName ?? await secureStorage.read(key: 'current_username') ?? 'Peer_A';
+
+      final mySignedPreKeyId =
+          await secureStorage.read(key: 'my_signed_prekey_id') ?? '0';
+
+      // 1. Upload Node A's details to Supabase (matching new schema)
+      await supabase.from('trust_me_secure_invites').insert({
+        'creator_id': userId,
+        'invite_code': code,
+        'creator_username': myUsername,
+        'creator_signed_prekey_id': int.tryParse(mySignedPreKeyId) ?? 0,
+      });
+
+      print("✅ Invite logged. Launching Background Radar...");
+
+      // Start radar in the background so it doesn't freeze the app!
+      _startActiveRadar(code);
     } catch (e) {
       print("⚠️ Supabase Invite Insert Error: $e");
+      rethrow;
     }
 
     // Instantly returns the code to the UI while radar spins in the background!

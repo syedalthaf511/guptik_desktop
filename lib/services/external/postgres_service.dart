@@ -57,6 +57,13 @@ class PostgresService {
         print("✅ DB Check: custom_username column is ready.");
       } catch (_) {}
 
+      // 🚀 AUDIENCE MIGRATION: ensure the audience columns exist on existing installs.
+      try {
+        await _connection!.execute('ALTER TABLE mp_videos ADD COLUMN IF NOT EXISTS made_for_kids BOOLEAN DEFAULT FALSE;');
+        await _connection!.execute("ALTER TABLE mp_videos ADD COLUMN IF NOT EXISTS age_rating TEXT DEFAULT 'all';");
+        print("✅ DB Check: mp_videos audience columns are ready.");
+      } catch (_) {}
+
     } catch (e) {
       print("❌ Database Connection Failed: $e");
     }
@@ -644,6 +651,7 @@ class PostgresService {
         live_ended_timestamp TIMESTAMPTZ,
         category TEXT,
         age_rating TEXT DEFAULT 'all',
+        made_for_kids BOOLEAN DEFAULT FALSE,
         copyright_info TEXT,
         monetization_enabled BOOLEAN DEFAULT FALSE,
         sticker_products JSONB DEFAULT '[]',
@@ -670,6 +678,18 @@ class PostgresService {
     ''');
     await conn.execute('CREATE INDEX IF NOT EXISTS idx_mp_videos_channel ON mp_videos(channel_id)');
     await conn.execute('CREATE INDEX IF NOT EXISTS idx_mp_videos_upload ON mp_videos(upload_timestamp DESC)');
+
+    // 🚀 AUDIENCE MIGRATION (self-healing):
+    // Older installs created mp_videos before made_for_kids / age_rating existed.
+    // Because CREATE TABLE IF NOT EXISTS skips an already-existing table, those
+    // stale tables keep missing columns and the upload (PlayerUploadService STEP 3)
+    // fails with 42703 "column made_for_kids does not exist". Adding the columns
+    // here on every init guarantees they exist even when the table pre-dates them.
+    try {
+      await conn.execute('ALTER TABLE mp_videos ADD COLUMN IF NOT EXISTS made_for_kids BOOLEAN DEFAULT FALSE;');
+      await conn.execute("ALTER TABLE mp_videos ADD COLUMN IF NOT EXISTS age_rating TEXT DEFAULT 'all';");
+      print("✅ DB Check: mp_videos audience columns are ready.");
+    } catch (_) {}
 
     // -------------------------------------------------------------
     // 🚀 CHANNEL SUBSCRIPTIONS TRACKER

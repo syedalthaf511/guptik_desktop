@@ -1804,10 +1804,11 @@ void main() async {
         settings: const ConnectionSettings(sslMode: SslMode.disable),
       );
       
-      // 🚀 Added v.visibility to the SELECT query! Also filters out deleted videos!
+      // 🚀 Added v.visibility, v.category, v.tags, v.made_for_kids, v.age_rating
+      // to the SELECT query! Also filters out deleted videos!
       final result = await connection.execute(
         Sql.named("""
-          SELECT v.id, v.title, v.description, v.file_path, v.view_count_local, v.like_count_local, v.comment_count_local, c.channel_name, v.is_reel, v.upload_timestamp, v.visibility 
+          SELECT v.id, v.title, v.description, v.file_path, v.view_count_local, v.like_count_local, v.comment_count_local, c.channel_name, v.is_reel, v.upload_timestamp, v.visibility, v.category, v.tags, v.made_for_kids, v.age_rating
           FROM mp_videos v
           JOIN mp_channels c ON v.channel_id = c.channel_id
           WHERE v.channel_id = @cid AND v.is_deleted = false
@@ -1831,6 +1832,10 @@ void main() async {
           'is_reel': row[8] as bool? ?? false, 
           'created_at': row[9]?.toString() ?? DateTime.now().toString(), 
           'visibility': row[10]?.toString() ?? 'public', // 🚀 Map visibility
+          'category': row[11]?.toString() ?? '',
+          'tags': row[12] is List ? (row[12] as List).map((e) => e.toString()).toList() : <String>[],
+          'made_for_kids': row[13] as bool? ?? false,
+          'age_rating': row[14]?.toString() ?? 'all',
           'creator_uid': channelId,
         });
       }

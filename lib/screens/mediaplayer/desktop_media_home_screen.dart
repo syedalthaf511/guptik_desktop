@@ -41,7 +41,11 @@ class _DesktopMediaHomeScreenState extends State<DesktopMediaHomeScreen> {
   final TextEditingController _searchController = TextEditingController();
   String _searchQuery = "";
   String _selectedFilter = "All";
-  final List<String> _filters = ['All', 'Action', 'Thrillers', 'Trailers', 'Gaming', 'Music', 'Tech'];
+  // 🚀 YouTube-style chips: aligned with the actual categories used when
+  // uploading (see DesktopUploadScreen._categories) so every chip matches real
+  // videos. "All" shows everything; the rest filter by category (case-insensitive)
+  // and also by matching tags.
+  final List<String> _filters = ['All', 'Entertainment', 'Tech', 'Education', 'Gaming', 'Music', 'Vlog', 'News'];
 
   @override
   void initState() {

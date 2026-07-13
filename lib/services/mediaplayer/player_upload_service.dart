@@ -40,6 +40,8 @@ class PlayerUploadService {
     required String visibility,
     required bool isReel,
     required bool isMonetized,
+    required bool madeForKids,
+    required bool ageRestricted,
     required String channelName,
   }) async {
     final videoId = const Uuid().v4();
@@ -102,6 +104,8 @@ class PlayerUploadService {
         'visibility': visibility,
         'is_reel': isReel,
         'is_monetized': isMonetized,
+        'made_for_kids': madeForKids,
+        'age_rating': ageRestricted ? '18+' : 'all',
       });
       debugPrint("✅ STEP 2 SUCCESS: Synced to Global Supabase.");
     } catch (e) {
@@ -135,8 +139,8 @@ class PlayerUploadService {
       await connection.execute(
         Sql.named("""
           INSERT INTO mp_videos 
-          (id, channel_id, title, description, file_path, tags, category, visibility, is_reel, monetization_enabled) 
-          VALUES (@vid::UUID, @cid, @title, @desc, @path, @tags, @cat, @vis, @reel, @mon)
+          (id, channel_id, title, description, file_path, tags, category, visibility, is_reel, monetization_enabled, made_for_kids, age_rating) 
+          VALUES (@vid::UUID, @cid, @title, @desc, @path, @tags, @cat, @vis, @reel, @mon, @kids, @age)
         """),
         parameters: {
           'vid': videoId,
@@ -149,6 +153,8 @@ class PlayerUploadService {
           'vis': visibility,
           'reel': isReel,
           'mon': isMonetized,
+          'kids': madeForKids,
+          'age': ageRestricted ? '18+' : 'all',
         }
       );
       

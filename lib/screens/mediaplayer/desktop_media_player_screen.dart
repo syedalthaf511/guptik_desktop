@@ -42,6 +42,8 @@ class _DesktopMediaPlayerScreenState extends State<DesktopMediaPlayerScreen> {
   bool _isSaved = false;
   bool _nodeUnreachable = false;
   String _nodeError = '';
+  // 🚀 AGE GATE: tracks whether an 18+ video has been confirmed by the viewer.
+  bool _ageConfirmed = false;
 
   @override
   void initState() {
@@ -69,9 +71,115 @@ class _DesktopMediaPlayerScreenState extends State<DesktopMediaPlayerScreen> {
     
     debugPrint("🎬 ATTEMPTING TO STREAM: $streamUrl"); 
 
-    // 🚀 Pre-check: verify the creator's node is reachable before opening the player,
-    // so the user sees a clear error instead of a silent black screen.
-    _checkNodeReachable(safeUrl, streamUrl);
+    // 🚀 AGE GATE (YouTube-style): for age-restricted (18+) content ONLY, do NOT
+    // auto-play. Show a confirmation dialog first; only open the player after
+    // the viewer confirms they are 18 or older. A "Made for Kids" video must
+    // NEVER trigger this gate — kids' content plays normally (it is a
+    // classification, not a restriction). The `!madeForKids` guard guarantees
+    // a kids video can never be gated even if the stored age_rating is wrong.
+    if (widget.video.ageRating == '18+' && !widget.video.madeForKids) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _showAgeGate(safeUrl, streamUrl);
+      });
+    } else {
+      // 🚀 Pre-check: verify the creator's node is reachable before opening the player,
+      // so the user sees a clear error instead of a silent black screen.
+      _checkNodeReachable(safeUrl, streamUrl);
+    }
+  }
+
+  // 🚀 AGE GATE DIALOG: mirrors YouTube's mature-content confirmation.
+  void _showAgeGate(String safeUrl, String streamUrl) {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF1E293B),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Row(
+          children: [
+            Icon(Icons.warning_amber_rounded, color: Colors.redAccent, size: 28),
+            SizedBox(width: 10),
+            Text('Age-restricted content', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+          ],
+        ),
+        content: const Text(
+          'This video may be inappropriate for some users. Confirm that you are at least 18 years old to continue.',
+          style: TextStyle(color: Colors.white70, fontSize: 14, height: 1.5),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context);
+              if (mounted) {
+                setState(() {
+                  _nodeUnreachable = true;
+                  _nodeError = 'Playback blocked: age restriction not confirmed.';
+                });
+              }
+            },
+            child: const Text('Cancel', style: TextStyle(color: Colors.grey)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF00E5FF)),
+            onPressed: () {
+              Navigator.pop(context);
+              if (mounted) {
+                setState(() => _ageConfirmed = true);
+                _checkNodeReachable(safeUrl, streamUrl);
+              }
+            },
+            child: const Text('I am 18 or older', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // 🚀 AUDIENCE BADGES: YouTube-style "Made for Kids" + "18+" indicators.
+  List<Widget> _buildAudienceBadges() {
+    final badges = <Widget>[];
+    if (widget.video.madeForKids) {
+      badges.add(
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+          decoration: BoxDecoration(
+            color: const Color(0xFF00E5FF).withAlpha(25),
+            borderRadius: BorderRadius.circular(4),
+            border: Border.all(color: const Color(0xFF00E5FF).withAlpha(120)),
+          ),
+          child: const Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.child_care, size: 13, color: Color(0xFF00E5FF)),
+              SizedBox(width: 4),
+              Text('Made for Kids', style: TextStyle(color: Color(0xFF00E5FF), fontSize: 11, fontWeight: FontWeight.w600)),
+            ],
+          ),
+        ),
+      );
+    }
+    if (widget.video.ageRating == '18+') {
+      badges.add(
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+          decoration: BoxDecoration(
+            color: Colors.redAccent.withAlpha(25),
+            borderRadius: BorderRadius.circular(4),
+            border: Border.all(color: Colors.redAccent.withAlpha(140)),
+          ),
+          child: const Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.warning_amber_rounded, size: 13, color: Colors.redAccent),
+              SizedBox(width: 4),
+              Text('18+', style: TextStyle(color: Colors.redAccent, fontSize: 11, fontWeight: FontWeight.w700)),
+            ],
+          ),
+        ),
+      );
+    }
+    return badges;
   }
 
   Future<void> _checkNodeReachable(String safeUrl, String streamUrl) async {
@@ -478,6 +586,16 @@ class _DesktopMediaPlayerScreenState extends State<DesktopMediaPlayerScreen> {
                         ),
                       ),
                     ),
+                    const SizedBox(height: 16),
+
+                    // 🚀 AUDIENCE BADGES (Made for Kids / 18+) shown in the player header.
+                    if (widget.video.madeForKids || widget.video.ageRating == '18+')
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: _buildAudienceBadges(),
+                      ),
+
                     const SizedBox(height: 16),
 
                     Wrap(

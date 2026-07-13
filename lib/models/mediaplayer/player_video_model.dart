@@ -14,6 +14,10 @@ class PlayerVideo {
   final bool isReel;
   final String visibility;
 
+  // 🚀 AUDIENCE FIELDS: "Made for kids" + age restriction (YouTube-style)
+  final bool madeForKids;
+  final String ageRating; // 'all' or '18+'
+
   // 🚀 NEW: Extended fields for enhanced features
   final String category;
   final List<String> tags;
@@ -47,6 +51,8 @@ class PlayerVideo {
     this.stickers = const [],
     required this.isReel,
     required this.visibility,
+    this.madeForKids = false,
+    this.ageRating = 'all',
     this.category = '',
     this.tags = const [],
     this.isMonetized = false,
@@ -104,6 +110,9 @@ class PlayerVideo {
       channelName: json['channel_name'] ?? 'Unknown Creator', 
       isReel: json['is_reel'] ?? false,
       visibility: json['visibility'] ?? 'public',
+      // 🚀 AUDIENCE FIELDS
+      madeForKids: json['made_for_kids'] ?? false,
+      ageRating: json['age_rating']?.toString() ?? 'all',
       // 🚀 NEW: Extended fields
       category: json['category']?.toString() ?? '',
       tags: parseTags(json['tags']),
@@ -142,6 +151,8 @@ class PlayerVideo {
         'stickers': stickers,
         'is_reel': isReel,
         'visibility': visibility,
+        'made_for_kids': madeForKids,
+        'age_rating': ageRating,
         'category': category,
         'tags': tags,
         'is_monetized': isMonetized,
