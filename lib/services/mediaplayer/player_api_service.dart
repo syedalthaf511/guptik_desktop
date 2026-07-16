@@ -126,6 +126,79 @@ class PlayerApiService {
     } catch (e) { return false; }
   }
 
+  /// 🚀 REPOST: Re-shares a video to the viewer's profile while preserving
+  /// original creator attribution. Talks to the Docker gateway
+  /// `/player/video/repost` endpoint (consistent with like/comment/save/view).
+  Future<bool> repostVideo({
+    required String originalVideoId,
+    required String originalCreatorUid,
+    String? originalCreatorName,
+    String? originalChannelName,
+    required String reposterUid,
+    String? reposterChannelName,
+    String? repostComment,
+  }) async {
+    if (gatewayUrl == null) return false;
+    try {
+      final safeUrl = gatewayUrl!.startsWith('http') ? gatewayUrl : 'https://$gatewayUrl';
+      final response = await http.post(
+        Uri.parse('$safeUrl/player/video/repost'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'original_video_id': originalVideoId,
+          'original_creator_uid': originalCreatorUid,
+          'original_creator_name': originalCreatorName ?? '',
+          'original_channel_name': originalChannelName ?? '',
+          'reposter_uid': reposterUid,
+          'reposter_channel_name': reposterChannelName ?? '',
+          'repost_comment': repostComment,
+        }),
+      );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        // Server blocks duplicate reposts — tell the UI not to update.
+        if (data['status'] == 'already_reposted') return false;
+        return true;
+      }
+      return false;
+    } catch (e) {
+      debugPrint('Repost Error: $e');
+      return false;
+    }
+  }
+
+  /// 🚀 SHARE: Records a share into the node's `mp_shared_videos` table and
+  /// increments the video's `share_count_local`. Called by the player Share
+  /// button after the shareable link is copied, so shares are actually tracked
+  /// (not just copied to the clipboard). Talks to the Docker gateway
+  /// `/player/video/share` endpoint (consistent with like/comment/save/repost).
+  Future<bool> shareVideo({
+    required String videoId,
+    required String creatorUid,
+    String shareMethod = 'link',
+    List<String> recipientUids = const [],
+  }) async {
+    if (gatewayUrl == null) return false;
+    try {
+      final safeUrl = gatewayUrl!.startsWith('http') ? gatewayUrl : 'https://$gatewayUrl';
+      final response = await http.post(
+        Uri.parse('$safeUrl/player/video/share'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'video_id': videoId,
+          'creator_uid': creatorUid,
+          'share_method': shareMethod,
+          'recipient_uids': recipientUids,
+        }),
+      );
+      return response.statusCode == 200;
+    } catch (e) {
+      debugPrint('Share Error: $e');
+      return false;
+    }
+  }
+
   // -------------------------------------------------------------------------
   // READ OPERATIONS (GET) - 🚀 ADDED TO COMPLETE SPRINT 3
   // -------------------------------------------------------------------------
@@ -188,14 +261,30 @@ class PlayerApiService {
 
       final data = jsonDecode(response.body);
       
-      // 2. If Docker accepted it as a brand new unique view, TELL SUPABASE!
-      if (data['status'] == 'view_added') {
-         await Supabase.instance.client.rpc('increment_video_view', params: {'vid': videoId});
-      }
-      
-    } catch (e) {
-      debugPrint('View Count Error: $e');
-    }
+       // 2. If Docker accepted it as a brand new unique view, sync the global
+       //    Supabase feed count. We avoid the missing `increment_video_view`
+       //    RPC (PGRST202) and do a safe read-then-write instead.
+       if (data['status'] == 'view_added') {
+         try {
+           final supabase = Supabase.instance.client;
+           final current = await supabase
+               .from('mp_videos')
+               .select('view_count')
+               .eq('video_id', videoId)
+               .maybeSingle();
+           final int views = ((current?['view_count'] as int?) ?? 0) + 1;
+           await supabase
+               .from('mp_videos')
+               .update({'view_count': views})
+               .eq('video_id', videoId);
+         } catch (e) {
+           debugPrint('View Count Sync Error: $e');
+         }
+       }
+       
+     } catch (e) {
+       debugPrint('View Count Error: $e');
+     }
   }
   
   // =========================================================================

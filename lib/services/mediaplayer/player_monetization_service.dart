@@ -44,7 +44,7 @@ class PlayerMonetizationService {
                  click_count_local, purchase_initiated_count,
                  purchase_completed_count, is_active, created_at, updated_at
           FROM mp_sticker_products_catalog
-          WHERE video_id = @vid AND is_active = TRUE
+          WHERE video_id::text = @vid AND is_active = TRUE
           ORDER BY timestamp_in_video ASC
         '''),
         parameters: {'vid': videoId},
@@ -57,7 +57,7 @@ class PlayerMonetizationService {
                  service_name, price, currency, description,
                  booking_count_local, is_active, created_at
           FROM mp_sticker_services_catalog
-          WHERE video_id = @vid AND is_active = TRUE
+          WHERE video_id::text = @vid AND is_active = TRUE
           ORDER BY timestamp_in_video ASC
         '''),
         parameters: {'vid': videoId},
@@ -294,7 +294,7 @@ class PlayerMonetizationService {
             COALESCE(SUM(purchase_completed_count), 0) as total_completed,
             COALESCE(SUM(price * purchase_completed_count), 0) as gross_revenue
           FROM mp_sticker_products_catalog spc
-          JOIN mp_videos uv ON spc.video_id = uv.id::text
+          JOIN mp_videos uv ON spc.video_id = uv.id
           WHERE uv.channel_id = @cid AND spc.is_active = TRUE
         '''),
         parameters: {'cid': channelId},
@@ -321,15 +321,15 @@ class PlayerMonetizationService {
 
       if (productResult.isNotEmpty) {
         final row = productResult.first;
-        totalStickers = (row[0] as int?) ?? 0;
-        totalClicks = (row[1] as int?) ?? 0;
-        totalCompleted = (row[3] as int?) ?? 0;
-        grossRevenue = (row[4] as num?)?.toDouble() ?? 0.0;
+        totalStickers = _toInt(row[0]);
+        totalClicks = _toInt(row[1]);
+        totalCompleted = _toInt(row[3]);
+        grossRevenue = _toDouble(row[4]);
       }
 
       if (channelResult.isNotEmpty) {
         final chRow = channelResult.first;
-        channelEarnings = (chRow[0] as num?)?.toDouble() ?? 0.0;
+        channelEarnings = _toDouble(chRow[0]);
         monetizationEnabled = (chRow[1] as bool?) ?? false;
       }
 
@@ -599,7 +599,7 @@ class PlayerMonetizationService {
                  COALESCE(SUM(spc.purchase_completed_count), 0) as purchases,
                  COALESCE(SUM(spc.price * spc.purchase_completed_count), 0) as revenue
           FROM mp_videos uv
-          LEFT JOIN mp_sticker_products_catalog spc ON spc.video_id = uv.id::text
+          LEFT JOIN mp_sticker_products_catalog spc ON spc.video_id = uv.id
           WHERE uv.channel_id = @cid AND uv.is_deleted = FALSE
           GROUP BY uv.id, uv.title
           ORDER BY revenue DESC
@@ -614,10 +614,10 @@ class PlayerMonetizationService {
         topVideos.add({
           'video_id': row[0]?.toString() ?? '',
           'title': row[1]?.toString() ?? '',
-          'sticker_count': row[2] ?? 0,
-          'clicks': row[3] ?? 0,
-          'purchases': row[4] ?? 0,
-          'revenue': (row[5] as num?)?.toDouble() ?? 0.0,
+          'sticker_count': _toInt(row[2]),
+          'clicks': _toInt(row[3]),
+          'purchases': _toInt(row[4]),
+          'revenue': _toDouble(row[5]),
         });
       }
 
@@ -674,5 +674,23 @@ class PlayerMonetizationService {
       }
     }
     return value;
+  }
+
+  /// Safely converts a Postgres numeric/int column to int. The `postgres`
+  /// package returns DECIMAL/numeric columns as Strings, so a direct
+  /// `(value as num)` cast would throw. Handles int, num, and String.
+  int _toInt(dynamic v) {
+    if (v == null) return 0;
+    if (v is int) return v;
+    if (v is num) return v.toInt();
+    return int.tryParse(v.toString()) ?? 0;
+  }
+
+  /// Safely converts a Postgres numeric/int column to double. Same rationale
+  /// as [_toInt] — numeric columns arrive as Strings from the driver.
+  double _toDouble(dynamic v) {
+    if (v == null) return 0.0;
+    if (v is num) return v.toDouble();
+    return double.tryParse(v.toString()) ?? 0.0;
   }
 }

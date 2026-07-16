@@ -1597,7 +1597,63 @@ void main() async {
       return Response(500, body: 'Thumbnail API Error: $e');
     }
   });
-  
+
+  // 🚀 WATCH PAGE: Shareable web player for a single video.
+  // Resolves the "route not found" error when someone clicks a shared link
+  // (e.g. https://<node>/watch/<videoId>). Embeds the streaming + thumbnail
+  // endpoints so the video plays directly in any browser without the desktop app.
+  router.get('/watch/<videoId>', (Request req, String videoId) async {
+    try {
+      final connection = await Connection.open(
+        Endpoint(host: 'db', port: 5432, database: 'postgres', username: 'postgres', password: 'GuptikSystemPassword2026'),
+        settings: const ConnectionSettings(sslMode: SslMode.disable),
+      );
+
+      final result = await connection.execute(
+        Sql.named("SELECT title, description FROM mp_videos WHERE id = CAST(@vid AS UUID) LIMIT 1"),
+        parameters: {'vid': videoId},
+      );
+      await connection.close();
+
+      final String title = result.isNotEmpty ? (result.first[0]?.toString() ?? 'Shared Video') : 'Video not found';
+      final String description = result.isNotEmpty ? (result.first[1]?.toString() ?? '') : 'This video may have been removed or the creator node is offline.';
+
+      final String html = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>$title — Guptik</title>
+  <style>
+    body { margin:0; background:#0F172A; color:#fff; font-family: system-ui, -apple-system, sans-serif; display:flex; flex-direction:column; align-items:center; }
+    .wrap { max-width: 900px; width:100%; padding: 24px; box-sizing: border-box; }
+    video { width:100%; border-radius:12px; background:#000; max-height:70vh; }
+    h1 { font-size:20px; margin:16px 0 8px; }
+    p { color:#94a3b8; line-height:1.5; }
+    .badge { display:inline-block; margin-top:16px; padding:8px 16px; background:#00E5FF; color:#000; border-radius:8px; font-weight:bold; text-decoration:none; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <video controls autoplay playsinline poster="/player/video/thumbnail/$videoId">
+      <source src="/player/video/stream/$videoId" type="video/mp4" />
+      Your browser does not support the video tag.
+    </video>
+    <h1>$title</h1>
+    <p>$description</p>
+    <a class="badge" href="/player/video/stream/$videoId">Open raw stream</a>
+  </div>
+</body>
+</html>
+""";
+
+      return Response.ok(html, headers: {'Content-Type': 'text/html; charset=utf-8'});
+    } catch (e) {
+      return Response.internalServerError(body: 'Watch page error: $e');
+    }
+  });
+
   router.post('/player/video/history', (Request req) async {
     try {
       final payload = await req.readAsString();
@@ -1737,6 +1793,51 @@ void main() async {
     }
   });
 
+  // 🚀 SHARE ROUTE: Records a share into mp_shared_videos and increments the
+  // video's share_count_local. Called by the player Share button after the
+  // shareable link is copied, so shares are actually tracked (not just copied).
+  router.post('/player/video/share', (Request req) async {
+    try {
+      final payload = await req.readAsString();
+      final data = jsonDecode(payload);
+      final connection = await Connection.open(
+        Endpoint(host: 'db', port: 5432, database: 'postgres', username: 'postgres', password: 'GuptikSystemPassword2026'),
+        settings: const ConnectionSettings(sslMode: SslMode.disable),
+      );
+
+      final String vid = data['video_id'].toString();
+      final String creatorUid = data['creator_uid']?.toString() ?? '';
+      final String method = data['share_method'] ?? 'link';
+      final List<String> recipients = (data['recipient_uids'] is List)
+          ? (data['recipient_uids'] as List).map((e) => e.toString()).toList()
+          : <String>[];
+
+      await connection.execute(
+        Sql.named("""
+          INSERT INTO mp_shared_videos
+            (video_id, creator_uid, share_method, recipient_uids)
+          VALUES (@vid, @uid, @method, @recips)
+        """),
+        parameters: {
+          'vid': vid,
+          'uid': creatorUid,
+          'method': method,
+          'recips': recipients,
+        },
+      );
+
+      await connection.execute(
+        Sql.named("UPDATE mp_videos SET share_count_local = share_count_local + 1 WHERE id = CAST(@vid AS UUID)"),
+        parameters: {'vid': vid},
+      );
+
+      await connection.close();
+      return Response(200, body: jsonEncode({'status': 'shared'}));
+    } catch (e) {
+      return Response(500, body: 'Share Error: $e');
+    }
+  });
+
   // 8. GET VIDEO STATS (Real-time sync for UI)
   router.get('/player/video/stats/<videoId>', (Request req, String videoId) async {
     try {
@@ -1747,7 +1848,7 @@ void main() async {
       
       // 🚀 FIXED: Now it grabs view_count_local from the database!
       final result = await connection.execute(
-        Sql.named("SELECT like_count_local, comment_count_local, save_count_local, view_count_local FROM mp_videos WHERE id = CAST(@vid AS UUID) LIMIT 1"),
+        Sql.named("SELECT like_count_local, comment_count_local, save_count_local, view_count_local, repost_count_local FROM mp_videos WHERE id = CAST(@vid AS UUID) LIMIT 1"),
         parameters: {'vid': videoId}
       );
       
@@ -1759,7 +1860,8 @@ void main() async {
         'likes': result.first[0] ?? 0,
         'comments': result.first[1] ?? 0,
         'saves': result.first[2] ?? 0,
-        'views': result.first[3] ?? 0 // 🚀 FIXED: Sends views to the Media Player!
+        'views': result.first[3] ?? 0, // 🚀 FIXED: Sends views to the Media Player!
+        'reposts': result.first[4] ?? 0 // 🚀 FIXED: Sends repost count so the UI can display/sync it
       }), headers: {'Content-Type': 'application/json'});
     } catch (e) {
       return Response(500, body: 'Stats Error: $e');
@@ -1909,6 +2011,62 @@ void main() async {
       return Response(200, body: jsonEncode({'status': 'view_added'}));
     } catch (e) {
       return Response(500, body: 'View Error: $e');
+    }
+  });
+
+  // 🚀 REPOST ROUTE (Re-share a video with original creator attribution)
+  router.post('/player/video/repost', (Request req) async {
+    try {
+      final payload = await req.readAsString();
+      final data = jsonDecode(payload);
+      final connection = await Connection.open(
+        Endpoint(host: 'db', port: 5432, database: 'postgres', username: 'postgres', password: 'GuptikSystemPassword2026'),
+        settings: const ConnectionSettings(sslMode: SslMode.disable),
+      );
+
+      final String vid = data['original_video_id'].toString();
+      final String reposterUid = data['reposter_uid'].toString();
+
+      // 1. 🚀 GATEKEEPER: Prevent duplicate reposts by the same user
+      final checkExisting = await connection.execute(
+        Sql.named("SELECT id FROM mp_repost_videos WHERE original_video_id = @vid AND reposter_uid = @ruid LIMIT 1"),
+        parameters: {'vid': vid, 'ruid': reposterUid}
+      );
+
+      if (checkExisting.isNotEmpty) {
+        await connection.close();
+        return Response(200, body: jsonEncode({'status': 'already_reposted'}));
+      }
+
+      // 2. Insert the repost with original creator attribution
+      await connection.execute(
+        Sql.named("""
+          INSERT INTO mp_repost_videos
+            (original_video_id, original_creator_uid, original_creator_name,
+             original_channel_name, reposter_uid, reposter_channel_name, repost_comment)
+          VALUES (@ovid, @ocuid, @ocname, @ochname, @ruid, @rchname, @comment)
+        """),
+        parameters: {
+          'ovid': vid,
+          'ocuid': data['original_creator_uid'] ?? '',
+          'ocname': data['original_creator_name'] ?? '',
+          'ochname': data['original_channel_name'] ?? '',
+          'ruid': reposterUid,
+          'rchname': data['reposter_channel_name'] ?? '',
+          'comment': data['repost_comment'],
+        }
+      );
+
+      // 3. Increment the original video's repost count
+      await connection.execute(
+        Sql.named("UPDATE mp_videos SET repost_count_local = repost_count_local + 1 WHERE id = CAST(@vid AS UUID)"),
+        parameters: {'vid': vid}
+      );
+
+      await connection.close();
+      return Response(200, body: jsonEncode({'status': 'reposted'}));
+    } catch (e) {
+      return Response(500, body: 'Repost Error: $e');
     }
   });
 

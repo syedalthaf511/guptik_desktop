@@ -84,6 +84,17 @@ class _DesktopSystemFolderScreenState extends State<DesktopSystemFolderScreen> {
           LEFT JOIN mp_channels c ON d.channel_id = c.channel_id
           ORDER BY d.last_edited_at DESC
         ''');
+      } else if (widget.folderType == 'repost') {
+        // 🚀 REPOSTS: show the reposter's local mp_repost_videos, joined to the
+        // original video's metadata so the card has a title/thumbnail/channel.
+        result = await connection.execute('''
+          SELECT v.id, v.title, v.description, v.file_path, v.view_count_local,
+                 v.like_count_local, v.comment_count_local, c.channel_name, v.is_reel, r.reposted_at, c.channel_id
+          FROM mp_repost_videos r
+          JOIN mp_videos v ON r.original_video_id = v.id::text
+          JOIN mp_channels c ON v.channel_id = c.channel_id
+          ORDER BY r.reposted_at DESC
+        ''');
       }
 
       await connection.close();

@@ -94,119 +94,6 @@ class PlayerOrganizationService {
   }
 
   // =========================================================================
-  // REPOSTS
-  // =========================================================================
-
-  /// Creates a repost, preserving original creator attribution.
-  Future<bool> repostVideo({
-    required String originalVideoId,
-    required String originalCreatorUid,
-    String? originalCreatorName,
-    String? originalChannelName,
-    required String reposterUid,
-    String? reposterChannelName,
-    String? repostComment,
-  }) async {
-    try {
-      final conn = await _connect();
-
-      // Ensure the repost table exists (safe to call repeatedly)
-      await conn.execute('''
-        CREATE TABLE IF NOT EXISTS mp_repost_videos (
-          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-          original_video_id TEXT NOT NULL,
-          original_creator_uid TEXT NOT NULL,
-          original_creator_name TEXT DEFAULT '',
-          original_channel_name TEXT DEFAULT '',
-          reposter_uid TEXT NOT NULL,
-          reposter_channel_name TEXT DEFAULT '',
-          repost_comment TEXT,
-          reposted_at TIMESTAMPTZ DEFAULT NOW(),
-          repost_likes INTEGER DEFAULT 0,
-          repost_comments INTEGER DEFAULT 0
-        )
-      ''');
-
-      await conn.execute(
-        Sql.named('''
-          INSERT INTO mp_repost_videos
-            (original_video_id, original_creator_uid, original_creator_name,
-             original_channel_name, reposter_uid, reposter_channel_name,
-             repost_comment)
-          VALUES (@ovid, @ocuid, @ocname, @ochname, @ruid, @rchname, @comment)
-        '''),
-        parameters: {
-          'ovid': originalVideoId,
-          'ocuid': originalCreatorUid,
-          'ocname': originalCreatorName ?? '',
-          'ochname': originalChannelName ?? '',
-          'ruid': reposterUid,
-          'rchname': reposterChannelName ?? '',
-          'comment': repostComment,
-        },
-      );
-
-      // Increment the original video's repost count
-      await conn.execute(
-        Sql.named('''
-          UPDATE mp_videos
-          SET repost_count_local = repost_count_local + 1
-          WHERE id::text = @ovid
-        '''),
-        parameters: {'ovid': originalVideoId},
-      );
-
-      await conn.close();
-      return true;
-    } catch (e) {
-      debugPrint('Repost Video Error: $e');
-      return false;
-    }
-  }
-
-  /// Fetches all reposts made by a specific user.
-  /// Uses index-based column access matching the existing pattern.
-  Future<List<PlayerRepost>> fetchUserReposts(String reposterUid) async {
-    try {
-      final conn = await _connect();
-      final result = await conn.execute(
-        Sql.named('''
-          SELECT id, original_video_id, original_creator_uid,
-                 original_creator_name, original_channel_name,
-                 reposter_uid, reposter_channel_name, repost_comment,
-                 reposted_at, repost_likes, repost_comments
-          FROM mp_repost_videos
-          WHERE reposter_uid = @ruid
-          ORDER BY reposted_at DESC
-        '''),
-        parameters: {'ruid': reposterUid},
-      );
-      await conn.close();
-
-      final List<PlayerRepost> reposts = [];
-      for (final row in result) {
-        reposts.add(PlayerRepost.fromJson({
-          'id': row[0]?.toString() ?? '',
-          'original_video_id': row[1]?.toString() ?? '',
-          'original_creator_uid': row[2]?.toString() ?? '',
-          'original_creator_name': row[3]?.toString() ?? '',
-          'original_channel_name': row[4]?.toString() ?? '',
-          'reposter_uid': row[5]?.toString() ?? '',
-          'reposter_channel_name': row[6]?.toString() ?? '',
-          'repost_comment': row[7]?.toString(),
-          'reposted_at': row[8]?.toString() ?? '',
-          'repost_likes': row[9] ?? 0,
-          'repost_comments': row[10] ?? 0,
-        }));
-      }
-      return reposts;
-    } catch (e) {
-      debugPrint('Fetch User Reposts Error: $e');
-      return [];
-    }
-  }
-
-  // =========================================================================
   // DRAFTS (mp_draft_videos)
   // =========================================================================
 
@@ -330,6 +217,59 @@ class PlayerOrganizationService {
       return true;
     } catch (e) {
       debugPrint('Delete Draft Error: $e');
+      return false;
+    }
+  }
+
+  // =========================================================================
+  // REPOSTS (mp_repost_videos) — LOCAL node record
+  // =========================================================================
+
+  /// Records a repost on the *user's local* node so it appears in their
+  /// "Repost Videos" folder. The gateway call to the original video's node
+  /// (PlayerApiService.repostVideo) handles incrementing that video's
+  /// repost_count_local; this writes the user's own copy locally so they can
+  /// see "My Reposts". Mirrors the gateway's duplicate-guard per node.
+  Future<bool> saveLocalRepost({
+    required String originalVideoId,
+    required String originalCreatorUid,
+    String originalCreatorName = '',
+    String originalChannelName = '',
+    required String reposterUid,
+    String reposterChannelName = '',
+    String? repostComment,
+  }) async {
+    try {
+      final conn = await _connect();
+      final check = await conn.execute(
+        Sql.named('SELECT id FROM mp_repost_videos WHERE original_video_id = @vid AND reposter_uid = @ruid LIMIT 1'),
+        parameters: {'vid': originalVideoId, 'ruid': reposterUid},
+      );
+      if (check.isNotEmpty) {
+        await conn.close();
+        return false; // already reposted locally
+      }
+      await conn.execute(
+        Sql.named('''
+          INSERT INTO mp_repost_videos
+            (original_video_id, original_creator_uid, original_creator_name,
+             original_channel_name, reposter_uid, reposter_channel_name, repost_comment)
+          VALUES (@ovid, @ocuid, @ocname, @ochname, @ruid, @rchname, @comment)
+        '''),
+        parameters: {
+          'ovid': originalVideoId,
+          'ocuid': originalCreatorUid,
+          'ocname': originalCreatorName,
+          'ochname': originalChannelName,
+          'ruid': reposterUid,
+          'rchname': reposterChannelName,
+          'comment': repostComment,
+        },
+      );
+      await conn.close();
+      return true;
+    } catch (e) {
+      debugPrint('Save Local Repost Error: $e');
       return false;
     }
   }

@@ -124,15 +124,17 @@ class PlayerUploadService {
 
       await connection.execute(
         Sql.named("""
-          INSERT INTO mp_channels (channel_id, user_id, channel_name) 
-          VALUES (@cid, @uid, @cname) 
+          INSERT INTO mp_channels (channel_id, user_id, channel_name, monetization_enabled) 
+          VALUES (@cid, @uid, @cname, @mon) 
           ON CONFLICT (channel_id) 
-          DO UPDATE SET channel_name = EXCLUDED.channel_name
+          DO UPDATE SET channel_name = EXCLUDED.channel_name,
+                        monetization_enabled = EXCLUDED.monetization_enabled
         """),
         parameters: {
           'cid': currentUser.id, 
           'uid': currentUser.id,
-          'cname': channelName
+          'cname': channelName,
+          'mon': isMonetized,
         }
       );
 

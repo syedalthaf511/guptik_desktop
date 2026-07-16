@@ -92,9 +92,80 @@ class PostgresService {
       );
       _isConnected = true;
       print("DB: Re-connected successfully as $safeUser");
-// 🚀 THE MIGRATION FIX: Check and add the column every time we connect!
+      // 🚀 MIGRATION NOTE: Schema migrations (like custom_username column) run
+      // only in connect() as the postgres superuser. The per-user role doesn't
+      // own the tables, so ALTER TABLE would fail with "must be owner of table".
+      // The column is guaranteed to exist after the initial connect() runs.
+
+      // 🚀 REPOST TABLE SELF-HEALING:
+      // mp_repost_videos is created during registration (initializeUserDatabase ->
+      // setupDefaultDatabase), but existing users who only run connectExistingUser()
+      // on launch never hit that path. This idempotent CREATE guarantees the table
+      // exists for everyone, matching how the other mp_* tables self-heal above.
       try {
-        await _connection!.execute('ALTER TABLE tm_contacts ADD COLUMN IF NOT EXISTS custom_username TEXT;');
+        await _connection!.execute('''
+          CREATE TABLE IF NOT EXISTS mp_repost_videos (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            original_video_id TEXT NOT NULL,
+            original_creator_uid TEXT NOT NULL,
+            original_creator_name TEXT DEFAULT '',
+            original_channel_name TEXT DEFAULT '',
+            reposter_uid TEXT NOT NULL,
+            reposter_channel_name TEXT DEFAULT '',
+            repost_comment TEXT,
+            reposted_at TIMESTAMPTZ DEFAULT NOW(),
+            repost_likes INTEGER DEFAULT 0,
+            repost_comments INTEGER DEFAULT 0
+          )
+        ''');
+        print("✅ DB Check: mp_repost_videos table is ready.");
+      } catch (_) {}
+
+      // 🚀 SHARED VIDEOS TABLE SELF-HEALING:
+      // mp_shared_videos is created during registration (initializeUserDatabase ->
+      // setupDefaultDatabase), but existing users who only run connectExistingUser()
+      // on launch never hit that path. This idempotent CREATE guarantees the table
+      // exists for everyone, matching how the other mp_* tables self-heal above.
+      try {
+        await _connection!.execute('''
+          CREATE TABLE IF NOT EXISTS mp_shared_videos (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            video_id TEXT NOT NULL,
+            creator_uid TEXT,
+            shared_timestamp TIMESTAMPTZ DEFAULT NOW(),
+            share_method TEXT DEFAULT 'link',
+            share_timestamp_in_video DECIMAL,
+            recipient_uids TEXT[] DEFAULT '{}',
+            opened_by_receiver BOOLEAN DEFAULT FALSE,
+            is_incognito BOOLEAN DEFAULT FALSE
+          )
+        ''');
+        print("✅ DB Check: mp_shared_videos table is ready.");
+      } catch (_) {}
+
+      // 🚀 DRAFT VIDEOS TABLE SELF-HEALING:
+      // mp_draft_videos is created during registration (initializeUserDatabase ->
+      // setupDefaultDatabase), but existing users who only run connectExistingUser()
+      // on launch never hit that path. This idempotent CREATE guarantees the table
+      // exists for everyone. The Drafts folder (desktop_system_folder_screen) queries
+      // this table directly, so it must exist on every launch or the folder errors.
+      try {
+        await _connection!.execute('''
+          CREATE TABLE IF NOT EXISTS mp_draft_videos (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            channel_id TEXT NOT NULL,
+            title TEXT,
+            description TEXT,
+            tags TEXT[] DEFAULT '{}',
+            file_path_temp TEXT,
+            thumbnail_temp_path TEXT,
+            last_edited_at TIMESTAMPTZ DEFAULT NOW(),
+            schedule_publish_at TIMESTAMPTZ,
+            cross_post_platforms TEXT[] DEFAULT '{}',
+            created_at TIMESTAMPTZ DEFAULT NOW()
+          )
+        ''');
+        print("✅ DB Check: mp_draft_videos table is ready.");
       } catch (_) {}
 
     } catch (e) {
@@ -810,6 +881,27 @@ class PostgresService {
         schedule_publish_at TIMESTAMPTZ,
         cross_post_platforms TEXT[] DEFAULT '{}',
         created_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    ''');
+
+    // 🚀 REPOSTS: Re-shared videos with original creator attribution.
+    // Centralized here (instead of only inside PlayerOrganizationService) so
+    // the table is guaranteed to exist on DB init, matching every other mp_*
+    // table. PlayerOrganizationService also has a CREATE TABLE IF NOT EXISTS
+    // guard, so this is idempotent and safe on existing installs.
+    await conn.execute('''
+      CREATE TABLE IF NOT EXISTS mp_repost_videos (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        original_video_id TEXT NOT NULL,
+        original_creator_uid TEXT NOT NULL,
+        original_creator_name TEXT DEFAULT '',
+        original_channel_name TEXT DEFAULT '',
+        reposter_uid TEXT NOT NULL,
+        reposter_channel_name TEXT DEFAULT '',
+        repost_comment TEXT,
+        reposted_at TIMESTAMPTZ DEFAULT NOW(),
+        repost_likes INTEGER DEFAULT 0,
+        repost_comments INTEGER DEFAULT 0
       )
     ''');
 

@@ -11,6 +11,7 @@ import 'package:path/path.dart' as p;
 import 'package:video_thumbnail/video_thumbnail.dart'; 
 import 'package:path_provider/path_provider.dart'; 
 import '../../services/mediaplayer/player_upload_service.dart';
+import '../../services/mediaplayer/player_organization_service.dart';
 
 class DesktopUploadScreen extends StatefulWidget {
   final PlayerVideo? videoToEdit;
@@ -233,6 +234,61 @@ class _DesktopUploadScreenState extends State<DesktopUploadScreen> {
     }
   }
 
+  /// 🚀 SAVE AS DRAFT: writes the video metadata to mp_draft_videos (without
+  /// publishing) so it appears in the Drafts folder (sidebar). Uses the same
+  /// local Postgres connection pattern as the other organization features.
+  Future<void> _handleSaveDraft() async {
+    if (_titleController.text.isEmpty || _selectedFilePath == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please provide a title and select a video.'), backgroundColor: Colors.redAccent),
+      );
+      return;
+    }
+
+    final user = Supabase.instance.client.auth.currentUser;
+    if (user == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please log in first.'), backgroundColor: Colors.redAccent),
+      );
+      return;
+    }
+
+    setState(() => _isPublishing = true);
+
+    try {
+      List<String> tags = _tagsController.text.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
+
+      final result = await PlayerOrganizationService().saveDraft(
+        channelId: user.id,
+        title: _titleController.text.trim(),
+        description: _descController.text.trim(),
+        tags: tags,
+        filePathTemp: _selectedFilePath,
+      );
+
+      if (mounted) {
+        setState(() => _isPublishing = false);
+        if (result != null) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Saved to Drafts!'), backgroundColor: Colors.green),
+          );
+          Navigator.pop(context);
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Failed to save draft.'), backgroundColor: Colors.redAccent),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _isPublishing = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to save draft: $e'), backgroundColor: Colors.redAccent),
+        );
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -401,6 +457,22 @@ class _DesktopUploadScreenState extends State<DesktopUploadScreen> {
               ],
             ),
             const SizedBox(height: 40),
+            // 🚀 SAVE AS DRAFT: stores metadata in mp_draft_videos so the video
+            // shows up in the Drafts folder without being published.
+            SizedBox(
+              width: double.infinity,
+              height: 52,
+              child: OutlinedButton.icon(
+                onPressed: _isPublishing ? null : _handleSaveDraft,
+                icon: const Icon(Icons.save_outlined, color: Color(0xFFD4AF37)),
+                label: const Text("Save as Draft", style: TextStyle(color: Color(0xFFD4AF37), fontSize: 16, fontWeight: FontWeight.bold)),
+                style: OutlinedButton.styleFrom(
+                  side: const BorderSide(color: Color(0xFFD4AF37)),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
             SizedBox(
               width: double.infinity,
               height: 56,

@@ -10,6 +10,7 @@ import 'package:http/http.dart' as http;
 import '../../models/mediaplayer/player_video_model.dart';
 import '../../models/mediaplayer/player_comment_model.dart';
 import '../../services/mediaplayer/player_api_service.dart';
+import '../../services/mediaplayer/player_organization_service.dart';
 import '../../services/mediaplayer/player_comment_service.dart';
 import '../../services/mediaplayer/watch_history_local_store.dart';
 import '../../services/external/docker_service.dart';
@@ -40,6 +41,8 @@ class _DesktopMediaPlayerScreenState extends State<DesktopMediaPlayerScreen> {
   late int _currentComments;
   late int _currentViews;
   bool _isSaved = false;
+  bool _isReposted = false;
+  int _repostCount = 0;
   bool _nodeUnreachable = false;
   String _nodeError = '';
   // 🚀 AGE GATE: tracks whether an 18+ video has been confirmed by the viewer.
@@ -52,6 +55,7 @@ class _DesktopMediaPlayerScreenState extends State<DesktopMediaPlayerScreen> {
     _currentLikes = widget.video.likeCount;
     _currentComments = widget.video.commentCount;
     _currentViews = widget.video.viewCount;
+    _repostCount = widget.video.repostCount;
     
     // 🚀 Normalize the URL: strips whitespace, and uses http:// for local
     // addresses (Docker gateway is plain HTTP) and https:// for tunnels.
@@ -216,10 +220,11 @@ class _DesktopMediaPlayerScreenState extends State<DesktopMediaPlayerScreen> {
     
     if (mounted) {
       setState(() {
-        if (stats != null) {
-          _currentLikes = stats['likes'] ?? _currentLikes;
-          _currentViews = stats['views'] ?? _currentViews; 
-        }
+      if (stats != null) {
+        _currentLikes = stats['likes'] ?? _currentLikes;
+        _currentViews = stats['views'] ?? _currentViews;
+        _repostCount = stats['reposts'] ?? _repostCount;
+      }
         _currentComments = liveComments.length; 
       });
     }
@@ -271,6 +276,70 @@ class _DesktopMediaPlayerScreenState extends State<DesktopMediaPlayerScreen> {
       setState(() => _isSaved = true); 
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Video saved to your local Vault!'), backgroundColor: Colors.green)
+      );
+    }
+  }
+
+  /// 🚀 REPOST: Re-shares the current video to the viewer's own channel/profile
+  /// while preserving original creator attribution. Calls the Docker gateway
+  /// `/player/video/repost` endpoint via PlayerApiService (consistent with
+  /// like/comment/save/view engagement actions).
+  Future<void> _handleRepost() async {
+    final currentUser = Supabase.instance.client.auth.currentUser;
+    if (currentUser == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please log in to repost.'), backgroundColor: Colors.redAccent),
+      );
+      return;
+    }
+
+    // Don't let a creator repost their own video as a "repost".
+    if (currentUser.id == widget.video.creatorUid) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('This is your own video.'), backgroundColor: Colors.orange),
+      );
+      return;
+    }
+
+    if (_isReposted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('You already reposted this video.'), backgroundColor: Colors.orange),
+      );
+      return;
+    }
+
+    final success = await _apiService.repostVideo(
+      originalVideoId: widget.video.videoId,
+      originalCreatorUid: widget.video.creatorUid,
+      originalCreatorName: widget.video.channelName,
+      originalChannelName: widget.video.channelName,
+      reposterUid: currentUser.id,
+      reposterChannelName: widget.video.channelName,
+    );
+
+      if (success && mounted) {
+        // 🚀 Also record the repost on the user's LOCAL node so it appears in
+        // the "Repost Videos" folder. The gateway call above only writes to the
+        // original video's node (to increment its repost_count_local), so the
+        // reposter's own folder would otherwise stay empty.
+        await PlayerOrganizationService().saveLocalRepost(
+          originalVideoId: widget.video.videoId,
+          originalCreatorUid: widget.video.creatorUid,
+          originalCreatorName: widget.video.channelName,
+          originalChannelName: widget.video.channelName,
+          reposterUid: currentUser.id,
+          reposterChannelName: widget.video.channelName,
+        );
+        setState(() {
+          _isReposted = true;
+          _repostCount++;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Video reposted to your profile!'), backgroundColor: Colors.green),
+        );
+      } else if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Failed to repost video.'), backgroundColor: Colors.redAccent),
       );
     }
   }
@@ -634,9 +703,24 @@ class _DesktopMediaPlayerScreenState extends State<DesktopMediaPlayerScreen> {
                                 onTap: _isSaved ? null : _handleSave
                               ),
                               const SizedBox(width: 12),
+                              _buildActionButton(
+                                _isReposted ? Icons.repeat : Icons.repeat_outlined,
+                                _repostCount > 0
+                                    ? '$_repostCount'
+                                    : (_isReposted ? 'Reposted' : 'Repost'),
+                                onTap: _isReposted ? null : _handleRepost,
+                              ),
+                              const SizedBox(width: 12),
                               _buildActionButton(Icons.share, 'Share', onTap: () {
                                 final link = '${widget.video.creatorUrl}/watch/${widget.video.videoId}';
                                 Clipboard.setData(ClipboardData(text: link));
+                                // 🚀 Record the share so mp_shared_videos is populated
+                                // and share_count_local increments on the node.
+                                _apiService.shareVideo(
+                                  videoId: widget.video.videoId,
+                                  creatorUid: widget.video.creatorUid,
+                                  shareMethod: 'link',
+                                );
                                 ScaffoldMessenger.of(context).showSnackBar(
                                   const SnackBar(content: Text('Video Link Copied to Clipboard!'), backgroundColor: Colors.green)
                                 );

@@ -64,9 +64,29 @@ class _PlayerVideoCardState extends State<PlayerVideoCard> {
     }
   }
 
-  // 🚀 AUDIENCE BADGES: YouTube-style "Made for Kids" + "18+" indicators.
+  // 🚀 MONETIZATION + AUDIENCE BADGES: YouTube-style indicators.
   List<Widget> _buildAudienceBadges() {
     final badges = <Widget>[];
+    if (widget.video.isMonetized) {
+      badges.add(
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+          decoration: BoxDecoration(
+            color: Colors.green.withAlpha(25),
+            borderRadius: BorderRadius.circular(4),
+            border: Border.all(color: Colors.green.withAlpha(120)),
+          ),
+          child: const Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.attach_money, size: 11, color: Colors.green),
+              SizedBox(width: 3),
+              Text('Monetized', style: TextStyle(color: Colors.green, fontSize: 10, fontWeight: FontWeight.w600)),
+            ],
+          ),
+        ),
+      );
+    }
     if (widget.video.madeForKids) {
       badges.add(
         Container(
