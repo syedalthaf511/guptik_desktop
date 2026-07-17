@@ -6,6 +6,7 @@ import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:http/http.dart' as http;
+import 'dart:math' as math;
 
 import '../../models/mediaplayer/player_video_model.dart';
 import '../../models/mediaplayer/player_comment_model.dart';
@@ -32,10 +33,12 @@ class DesktopMediaPlayerScreen extends StatefulWidget {
   State<DesktopMediaPlayerScreen> createState() => _DesktopMediaPlayerScreenState();
 }
 
-class _DesktopMediaPlayerScreenState extends State<DesktopMediaPlayerScreen> {
+class _DesktopMediaPlayerScreenState extends State<DesktopMediaPlayerScreen> with SingleTickerProviderStateMixin {
   late final player = Player();
   late final controller = VideoController(player);
   late final PlayerApiService _apiService;
+  late final AnimationController _shakeController;
+  late final Animation<double> _shakeAnimation;
   
   late int _currentLikes;
   late int _currentComments;
@@ -51,6 +54,15 @@ class _DesktopMediaPlayerScreenState extends State<DesktopMediaPlayerScreen> {
   @override
   void initState() {
     super.initState();
+    
+    // 🚀 SHAKE ANIMATION SETUP
+    _shakeController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 500),
+    );
+    _shakeAnimation = Tween<double>(begin: 0, end: 1).animate(
+      CurvedAnimation(parent: _shakeController, curve: Curves.elasticOut),
+    );
     
     _currentLikes = widget.video.likeCount;
     _currentComments = widget.video.commentCount;
@@ -524,6 +536,19 @@ class _DesktopMediaPlayerScreenState extends State<DesktopMediaPlayerScreen> {
     }
   }
 
+  // 🚀 SHAKE ANIMATION TRIGGER: Called when user touches top or bottom of video
+  void _triggerShake() {
+    _shakeController.forward(from: 0).then((_) {
+      _shakeController.reset();
+    });
+  }
+
+  // 🚀 SHAKE TRANSFORMATION: Creates a shaking effect for the border
+  double _getShakeOffset(double value) {
+    final shakeAmount = math.sin(value * 2 * math.pi * 8) * 8;
+    return shakeAmount;
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -569,46 +594,79 @@ class _DesktopMediaPlayerScreenState extends State<DesktopMediaPlayerScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Container(
-                      width: double.infinity,
-                      height: 500,
-                      decoration: BoxDecoration(
-                        color: Colors.black,
-                        borderRadius: BorderRadius.circular(16),
-                        boxShadow: [
-                          BoxShadow(color: Colors.black.withAlpha(50), blurRadius: 20, offset: const Offset(0, 10))
-                        ]
-                      ),
-                      child: ClipRRect(
-                        borderRadius: BorderRadius.circular(16),
-                        child: Stack(fit: StackFit.expand, children: [
-                          Video(controller: controller),
-                          PlayerControlsOverlay(player: player, controller: controller),
-                          if (_nodeUnreachable)
-                            Container(
-                              color: Colors.black.withAlpha(220),
-                              padding: const EdgeInsets.all(24),
-                              child: Center(
-                                child: Column(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    const Icon(Icons.cloud_off, color: Color(0xFF00E5FF), size: 48),
-                                    const SizedBox(height: 16),
-                                    const Text(
-                                      'Creator Node Unreachable',
-                                      style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold),
-                                    ),
-                                    const SizedBox(height: 12),
-                                    Text(
-                                      _nodeError,
-                                      textAlign: TextAlign.center,
-                                      style: const TextStyle(color: Colors.white70, fontSize: 13, height: 1.5),
-                                    ),
-                                  ],
-                                ),
+                    AnimatedBuilder(
+                      animation: _shakeAnimation,
+                      builder: (context, child) {
+                        return Transform.translate(
+                          offset: Offset(_getShakeOffset(_shakeAnimation.value), 0),
+                          child: Container(
+                            width: double.infinity,
+                            height: 500,
+                            decoration: BoxDecoration(
+                              color: Colors.black,
+                              borderRadius: BorderRadius.circular(16),
+                              border: Border.all(
+                                color: const Color(0xFF00E5FF).withAlpha(120),
+                                width: 2,
                               ),
+                              boxShadow: [
+                                BoxShadow(color: Colors.black.withAlpha(50), blurRadius: 20, offset: const Offset(0, 10))
+                              ]
                             ),
-                        ]),
+                            child: ClipRRect(
+                              borderRadius: BorderRadius.circular(16),
+                              child: Stack(fit: StackFit.expand, children: [
+                                Video(controller: controller),
+                                PlayerControlsOverlay(player: player, controller: controller),
+                                if (_nodeUnreachable)
+                                  Container(
+                                    color: Colors.black.withAlpha(220),
+                                    padding: const EdgeInsets.all(24),
+                                    child: Center(
+                                      child: Column(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          const Icon(Icons.cloud_off, color: Color(0xFF00E5FF), size: 48),
+                                          const SizedBox(height: 16),
+                                          const Text(
+                                            'Creator Node Unreachable',
+                                            style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold),
+                                          ),
+                                          const SizedBox(height: 12),
+                                          Text(
+                                            _nodeError,
+                                            textAlign: TextAlign.center,
+                                            style: const TextStyle(color: Colors.white70, fontSize: 13, height: 1.5),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                              ]),
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                    // 🚀 TOP/BOTTOM TOUCH DETECTORS for shake effect
+                    GestureDetector(
+                      behavior: HitTestBehavior.translucent,
+                      onTap: _triggerShake,
+                      child: Container(
+                        width: double.infinity,
+                        height: 60,
+                        color: Colors.transparent,
+                        alignment: Alignment.topCenter,
+                      ),
+                    ),
+                    GestureDetector(
+                      behavior: HitTestBehavior.translucent,
+                      onTap: _triggerShake,
+                      child: Container(
+                        width: double.infinity,
+                        height: 30,
+                        color: Colors.transparent,
+                        alignment: Alignment.bottomCenter,
                       ),
                     ),
                     const SizedBox(height: 24),
@@ -761,7 +819,7 @@ class _DesktopMediaPlayerScreenState extends State<DesktopMediaPlayerScreen> {
                     topLeft: Radius.circular(48),
                     bottomLeft: Radius.circular(48),
                   ),
-                  border: Border.all(color: Colors.white.withAlpha(20), width: 1.5),
+                  border: Border.all(color:Color(0xFF00E5FF).withAlpha(120), width: 1.5),
                   boxShadow: [
                     BoxShadow(
                       color: Colors.black.withAlpha(90),

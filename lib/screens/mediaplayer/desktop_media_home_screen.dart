@@ -46,6 +46,10 @@ class _DesktopMediaHomeScreenState extends State<DesktopMediaHomeScreen> {
   // videos. "All" shows everything; the rest filter by category (case-insensitive)
   // and also by matching tags.
   final List<String> _filters = ['All', 'Entertainment', 'Tech', 'Education', 'Gaming', 'Music', 'Vlog', 'News'];
+  
+  // 🚀 TAG ANIMATION STATE: tracks which tag is currently "expanded" at the top
+  int _expandedTagIndex = -1;
+  final GlobalKey<AnimatedListState> _tagListKey = GlobalKey<AnimatedListState>();
 
   @override
   void initState() {
@@ -576,7 +580,6 @@ class _DesktopMediaHomeScreenState extends State<DesktopMediaHomeScreen> {
             child: ListView.separated(
               scrollDirection: Axis.horizontal,
               itemCount: _filters.length,
-              // 🚀 THE FIX: Changed from (_, __) to (context, index)
               separatorBuilder: (context, index) => const SizedBox(width: 12),
               itemBuilder: (context, index) {
                 final filter = _filters[index];
