@@ -21,7 +21,10 @@ import '../../widgets/mediaplayer/player_recommendation_card.dart';
 import '../../widgets/mediaplayer/player_comment_widget.dart';
 import '../../widgets/mediaplayer/player_controls_overlay.dart';
 import '../../widgets/mediaplayer/player_ai_panel.dart';
+import '../../widgets/mediaplayer/sticker_overlay.dart';
 import '../../screens/mediaplayer/creator_profile_screen.dart';
+import '../../services/mediaplayer/player_watcher_interest_service.dart';
+import '../../services/mediaplayer/player_report_service.dart';
 
 
 class DesktopMediaPlayerScreen extends StatefulWidget {
@@ -50,6 +53,12 @@ class _DesktopMediaPlayerScreenState extends State<DesktopMediaPlayerScreen> wit
   String _nodeError = '';
   // 🚀 AGE GATE: tracks whether an 18+ video has been confirmed by the viewer.
   bool _ageConfirmed = false;
+
+  // 🚀 WATCHER INTEREST: 'interested' / 'not_interested' / null (no choice yet).
+  String? _watcherInterest;
+  final PlayerWatcherInterestService _interestService =
+      PlayerWatcherInterestService();
+  final PlayerReportService _reportService = PlayerReportService();
 
   @override
   void initState() {
@@ -80,6 +89,7 @@ class _DesktopMediaPlayerScreenState extends State<DesktopMediaPlayerScreen> wit
     final currentUser = Supabase.instance.client.auth.currentUser;
     if (currentUser != null) {
       _apiService.addVideoView(widget.video.videoId, currentUser.id);
+      _loadWatcherInterest(currentUser.id);
     }
 
     _syncRealTimeStats();
@@ -330,6 +340,49 @@ class _DesktopMediaPlayerScreenState extends State<DesktopMediaPlayerScreen> wit
     );
 
       if (success && mounted) {
+        // 🚀 FEED ATTRIBUTION: Insert a NEW row in the admin Supabase
+        // mp_videos table attributed to the REPOSTER (User A), with
+        // repost_id pointing to the original video's row id. This is what
+        // makes the repost show up in the global feed as User A's video,
+        // with the original creator (User B) surfaced via the nested
+        // `original:mp_videos!repost_id(*)` expansion. The stream/thumbnail
+        // URLs still point to the original creator's node so the file plays.
+        try {
+          final supabase = Supabase.instance.client;
+          // Look up the original video's UUID row id from its text video_id.
+          final orig = await supabase
+              .from('mp_videos')
+              .select('id')
+              .eq('video_id', widget.video.videoId)
+              .maybeSingle();
+          final origRowId = orig?['id']?.toString();
+          if (origRowId != null) {
+            final repostVideoId = math.Random(DateTime.now().millisecondsSinceEpoch).toString();
+            await supabase.from('mp_videos').insert({
+              'video_id': repostVideoId,
+              'creator_uid': currentUser.id,
+              'channel_name': widget.video.channelName,
+              'title': widget.video.title,
+              'description': widget.video.description,
+              'creator_cloudflare_url': widget.video.originalCreatorUrl ?? widget.video.creatorUrl,
+              'thumbnail_url': widget.video.thumbnailUrl ?? '',
+              'category': widget.video.category,
+              'visibility': 'public',
+              'is_reel': widget.video.isReel,
+              'is_monetized': false,
+              'made_for_kids': widget.video.madeForKids,
+              'age_rating': widget.video.ageRating,
+              'repost_id': origRowId,
+            });
+          }
+        } catch (e) {
+          debugPrint('Repost feed insert (non-fatal): $e');
+        }
+
+        // 🚀 Also record the repost on the user's LOCAL node so it appears in
+        // the "Repost Videos" folder. The gateway call above only writes to the
+        // original video's node (to increment its repost_count_local), so the
+        // reposter's own folder would otherwise stay empty.
         // 🚀 Also record the repost on the user's LOCAL node so it appears in
         // the "Repost Videos" folder. The gateway call above only writes to the
         // original video's node (to increment its repost_count_local), so the
@@ -536,6 +589,157 @@ class _DesktopMediaPlayerScreenState extends State<DesktopMediaPlayerScreen> wit
     }
   }
 
+  // 🚀 WATCHER INTEREST: load the watcher's saved interest for this video so
+  // the UI can show the correct "Interested" / "Not interested" chip state.
+  Future<void> _loadWatcherInterest(String watcherUid) async {
+    final interest = await _interestService.getInterest(
+      videoId: widget.video.videoId,
+      watcherUid: watcherUid,
+    );
+    if (mounted) setState(() => _watcherInterest = interest);
+  }
+
+  // 🚀 WATCHER INTEREST: set interested / not_interested / clear for this video.
+  Future<void> _setWatcherInterest(String? interest) async {
+    final currentUser = Supabase.instance.client.auth.currentUser;
+    if (currentUser == null) return;
+
+    if (interest == null) {
+      // Clear feedback
+      await _interestService.setInterest(
+        videoId: widget.video.videoId,
+        creatorUid: widget.video.creatorUid,
+        watcherUid: currentUser.id,
+        interest: '',
+      );
+    } else {
+      await _interestService.setInterest(
+        videoId: widget.video.videoId,
+        creatorUid: widget.video.creatorUid,
+        watcherUid: currentUser.id,
+        interest: interest,
+      );
+    }
+    if (mounted) setState(() => _watcherInterest = interest);
+  }
+
+  // 🚀 REPORT: opens a dialog to file a report for the current video.
+  void _showReportDialog() {
+    final descController = TextEditingController();
+    String selectedType = 'spam';
+    final reportTypes = [
+      'spam',
+      'nudity',
+      'harassment',
+      'misinformation',
+      'copyright',
+      'other',
+    ];
+
+    showDialog(
+      context: context,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setStateDialog) {
+            return AlertDialog(
+              backgroundColor: const Color(0xFF1E293B),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              title: const Row(
+                children: [
+                  Icon(Icons.flag, color: Colors.redAccent, size: 24),
+                  SizedBox(width: 10),
+                  Text('Report Video', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                ],
+              ),
+              content: SizedBox(
+                width: 420,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Why are you reporting this video?',
+                      style: TextStyle(color: Colors.white70, fontSize: 13),
+                    ),
+                    const SizedBox(height: 12),
+                    DropdownButtonFormField<String>(
+                      value: selectedType,
+                      dropdownColor: const Color(0xFF0F172A),
+                      decoration: InputDecoration(
+                        filled: true,
+                        fillColor: const Color(0xFF0F172A),
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide.none),
+                      ),
+                      style: const TextStyle(color: Colors.white),
+                      items: reportTypes
+                          .map((t) => DropdownMenuItem(value: t, child: Text(t[0].toUpperCase() + t.substring(1))))
+                          .toList(),
+                      onChanged: (v) {
+                        if (v != null) {
+                          selectedType = v;
+                          setStateDialog(() {});
+                        }
+                      },
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: descController,
+                      maxLines: 3,
+                      style: const TextStyle(color: Colors.white),
+                      decoration: InputDecoration(
+                        hintText: 'Add details (optional)...',
+                        hintStyle: const TextStyle(color: Colors.grey),
+                        filled: true,
+                        fillColor: const Color(0xFF0F172A),
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide.none),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('Cancel', style: TextStyle(color: Colors.grey)),
+                ),
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent, foregroundColor: Colors.white),
+                  onPressed: () async {
+                    final currentUser = Supabase.instance.client.auth.currentUser;
+                    if (currentUser == null) {
+                      Navigator.pop(context);
+                      if (mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('Please log in to report.'), backgroundColor: Colors.redAccent),
+                        );
+                      }
+                      return;
+                    }
+                    final ok = await _reportService.fileReport(
+                      byUser: currentUser.id,
+                      videoId: widget.video.videoId,
+                      type: selectedType,
+                      description: descController.text.trim().isEmpty ? null : descController.text.trim(),
+                    );
+                    if (!context.mounted) return;
+                    Navigator.pop(context);
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(ok ? 'Report submitted. Thank you.' : 'Failed to submit report.'),
+                        backgroundColor: ok ? Colors.green : Colors.redAccent,
+                      ),
+                    );
+                  },
+                  child: const Text('Submit'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
   // 🚀 SHAKE ANIMATION TRIGGER: Called when user touches top or bottom of video
   void _triggerShake() {
     _shakeController.forward(from: 0).then((_) {
@@ -618,6 +822,7 @@ class _DesktopMediaPlayerScreenState extends State<DesktopMediaPlayerScreen> wit
                               child: Stack(fit: StackFit.expand, children: [
                                 Video(controller: controller),
                                 PlayerControlsOverlay(player: player, controller: controller),
+                                StickerOverlay(player: player, videoId: widget.video.videoId),
                                 if (_nodeUnreachable)
                                   Container(
                                     color: Colors.black.withAlpha(220),
@@ -675,7 +880,36 @@ class _DesktopMediaPlayerScreenState extends State<DesktopMediaPlayerScreen> wit
                       widget.video.title,
                       style: const TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold),
                     ),
-                    const SizedBox(height: 16),
+                    const SizedBox(height: 8),
+
+                    // 🚀 REPOST ATTRIBUTION: when this video is a repost, show the
+                    // reposter (this row's creator) as the actual creator, and
+                    // surface the original creator as "reposted from".
+                    if (widget.video.isRepost) ...[
+                      Container(
+                        margin: const EdgeInsets.only(bottom: 12),
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF00E5FF).withAlpha(20),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: const Color(0xFF00E5FF).withAlpha(120)),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(Icons.repeat, size: 14, color: Color(0xFF00E5FF)),
+                            const SizedBox(width: 6),
+                            Flexible(
+                              child: Text(
+                                'Reposted from ${widget.video.originalChannelName?.isNotEmpty == true ? widget.video.originalChannelName : "original creator"}',
+                                style: const TextStyle(color: Color(0xFF00E5FF), fontSize: 12, fontWeight: FontWeight.w600),
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
 
                     InkWell(
                       onTap: () {
@@ -783,9 +1017,51 @@ class _DesktopMediaPlayerScreenState extends State<DesktopMediaPlayerScreen> wit
                                   const SnackBar(content: Text('Video Link Copied to Clipboard!'), backgroundColor: Colors.green)
                                 );
                               }),
+                              const SizedBox(width: 12),
+                              _buildActionButton(Icons.flag_outlined, 'Report', onTap: _showReportDialog),
                             ],
                           ),
                         ),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+
+                    // 🚀 WATCHER INTEREST: Interested / Not interested / Clear chips.
+                    // Lets a watcher tell the recommendation engine whether this
+                    // video is relevant, persisted to the local mp_watcher_interest
+                    // table.
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        ChoiceChip(
+                          label: const Text('Interested', style: TextStyle(fontSize: 12)),
+                          selected: _watcherInterest == 'interested',
+                          selectedColor: const Color(0xFF00E5FF),
+                          backgroundColor: const Color(0xFF1E293B),
+                          labelStyle: TextStyle(
+                            color: _watcherInterest == 'interested' ? Colors.black : Colors.white,
+                          ),
+                          onSelected: (_) => _setWatcherInterest('interested'),
+                        ),
+                        ChoiceChip(
+                          label: const Text('Not interested', style: TextStyle(fontSize: 12)),
+                          selected: _watcherInterest == 'not_interested',
+                          selectedColor: Colors.redAccent,
+                          backgroundColor: const Color(0xFF1E293B),
+                          labelStyle: TextStyle(
+                            color: _watcherInterest == 'not_interested' ? Colors.white : Colors.white,
+                          ),
+                          onSelected: (_) => _setWatcherInterest('not_interested'),
+                        ),
+                        if (_watcherInterest != null)
+                          ChoiceChip(
+                            label: const Text('Clear', style: TextStyle(fontSize: 12)),
+                            selected: false,
+                            backgroundColor: const Color(0xFF1E293B),
+                            labelStyle: const TextStyle(color: Colors.grey),
+                            onSelected: (_) => _setWatcherInterest(null),
+                          ),
                       ],
                     ),
                     const SizedBox(height: 24),

@@ -35,14 +35,25 @@ class PlayerMonetizationService {
     try {
       final conn = await _connect();
 
+      // Ensure the catalog supports the new shoppable columns before we
+      // SELECT them. Without this, a video with stickers but a table that
+      // lacks `mrp`/`duration_on_screen` throws 42703 and returns no
+      // stickers (so nothing shows in the player).
+      await conn.execute('''
+        ALTER TABLE mp_sticker_products_catalog
+          ADD COLUMN IF NOT EXISTS mrp DECIMAL DEFAULT 0,
+          ADD COLUMN IF NOT EXISTS duration_on_screen DECIMAL DEFAULT 8
+      ''');
+
       // Products
       final productResult = await conn.execute(
         Sql.named('''
           SELECT id, video_id, product_id, timestamp_in_video, clickable_zone,
-                 product_name, price, currency, description, link_url,
+                 product_name, price, mrp, currency, description, link_url,
                  image_path, stock_status, sales_count_local,
                  click_count_local, purchase_initiated_count,
-                 purchase_completed_count, is_active, created_at, updated_at
+                 purchase_completed_count, is_active, created_at, updated_at,
+                 duration_on_screen
           FROM mp_sticker_products_catalog
           WHERE video_id::text = @vid AND is_active = TRUE
           ORDER BY timestamp_in_video ASC
@@ -76,18 +87,20 @@ class PlayerMonetizationService {
           'clickable_zone': _parseJsonb(row[4]),
           'product_name': row[5]?.toString() ?? 'Untitled',
           'price': row[6],
-          'currency': row[7]?.toString() ?? 'USD',
-          'description': row[8]?.toString() ?? '',
-          'link_url': row[9]?.toString(),
-          'image_path': row[10]?.toString(),
-          'stock_status': row[11]?.toString() ?? 'in_stock',
-          'sales_count_local': row[12] ?? 0,
-          'click_count_local': row[13] ?? 0,
-          'purchase_initiated_count': row[14] ?? 0,
-          'purchase_completed_count': row[15] ?? 0,
-          'is_active': row[16] ?? true,
-          'created_at': row[17]?.toString() ?? '',
-          'updated_at': row[18]?.toString() ?? '',
+          'mrp': row[7],
+          'currency': row[8]?.toString() ?? 'USD',
+          'description': row[9]?.toString() ?? '',
+          'link_url': row[10]?.toString(),
+          'image_path': row[11]?.toString(),
+          'stock_status': row[12]?.toString() ?? 'in_stock',
+          'sales_count_local': row[13] ?? 0,
+          'click_count_local': row[14] ?? 0,
+          'purchase_initiated_count': row[15] ?? 0,
+          'purchase_completed_count': row[16] ?? 0,
+          'is_active': row[17] ?? true,
+          'created_at': row[18]?.toString() ?? '',
+          'updated_at': row[19]?.toString() ?? '',
+          'duration_on_screen': row[20] ?? 8,
         }));
       }
 
@@ -130,27 +143,37 @@ class PlayerMonetizationService {
     String? linkUrl,
     String? imagePath,
     ClickableZone? clickableZone,
+    double mrp = 0,
+    double durationOnScreen = 8,
   }) async {
     try {
       final conn = await _connect();
+      // Ensure the catalog supports the new shoppable columns.
+      await conn.execute('''
+        ALTER TABLE mp_sticker_products_catalog
+          ADD COLUMN IF NOT EXISTS mrp DECIMAL DEFAULT 0,
+          ADD COLUMN IF NOT EXISTS duration_on_screen DECIMAL DEFAULT 8
+      ''');
       final result = await conn.execute(
         Sql.named('''
           INSERT INTO mp_sticker_products_catalog
-            (video_id, product_id, timestamp_in_video, clickable_zone,
-             product_name, price, currency, description, link_url,
-             image_path, stock_status, is_active)
-          VALUES (@vid, gen_random_uuid()::text, @ts, @zone, @name, @price,
-                  @cur, @desc, @link, @img, 'in_stock', TRUE)
+            (video_id, product_id, timestamp_in_video, duration_on_screen,
+             clickable_zone, product_name, price, mrp, currency, description,
+             link_url, image_path, stock_status, is_active)
+          VALUES (@vid, gen_random_uuid()::text, @ts, @dur, @zone, @name,
+                   @price, @mrp, @cur, @desc, @link, @img, 'in_stock', TRUE)
           RETURNING product_id
         '''),
         parameters: {
           'vid': videoId,
           'ts': timestampInVideo,
+          'dur': durationOnScreen,
           'zone': clickableZone != null
               ? jsonEncode(clickableZone.toJson())
               : null,
           'name': productName,
           'price': price,
+          'mrp': mrp,
           'cur': currency,
           'desc': description,
           'link': linkUrl,

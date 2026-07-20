@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../services/mediaplayer/player_monetization_service.dart';
 import 'sticker_editor_screen.dart';
 
@@ -23,10 +24,44 @@ class _MonetizationDashboardScreenState
   List<Map<String, dynamic>> _tiers = [];
   int _selectedTab = 0;
 
+  // 🚀 STICKER VIDEO SELECTOR: lets a creator pick which video to attach
+  // shoppable stickers to (the editor requires a videoId).
+  List<Map<String, dynamic>> _channelVideos = [];
+  String? _selectedStickerVideoId;
+  bool _loadingVideos = false;
+
   @override
   void initState() {
     super.initState();
     _loadData();
+  }
+
+  Future<void> _loadChannelVideos() async {
+    if (_channelVideos.isNotEmpty) return;
+    setState(() => _loadingVideos = true);
+    try {
+      final supabase = Supabase.instance.client;
+      final rows = await supabase
+          .from('mp_videos')
+          .select('video_id, title')
+          .eq('creator_uid', widget.channelId)
+          .order('published_at', ascending: false)
+          .limit(50);
+      if (mounted) {
+        setState(() {
+          _channelVideos = (rows as List)
+              .map((r) => {'video_id': r['video_id'], 'title': r['title']})
+              .toList();
+          if (_channelVideos.isNotEmpty) {
+            _selectedStickerVideoId = _channelVideos.first['video_id'];
+          }
+          _loadingVideos = false;
+        });
+      }
+    } catch (e) {
+      debugPrint('Load channel videos error: $e');
+      if (mounted) setState(() => _loadingVideos = false);
+    }
   }
 
   Future<void> _loadData() async {
@@ -546,6 +581,79 @@ class _MonetizationDashboardScreenState
     );
   }
 
+  /// 🚀 STICKERS TAB: pick a video, then show the shoppable sticker editor for
+  /// that video. This is what actually wires monetization (stickers) to a
+  /// specific video so they appear during playback.
+  Widget _buildStickersView() {
+    if (_channelVideos.isEmpty && !_loadingVideos) {
+      _loadChannelVideos();
+    }
+
+    if (_loadingVideos) {
+      return const Center(
+          child: CircularProgressIndicator(color: Color(0xFF00E5FF)));
+    }
+
+    if (_channelVideos.isEmpty) {
+      return const Center(
+        child: Text('No videos found for this channel.',
+            style: TextStyle(color: Colors.grey, fontSize: 14)),
+      );
+    }
+
+    return Column(
+      children: [
+        Container(
+          padding: const EdgeInsets.all(20),
+          decoration: BoxDecoration(
+            color: const Color(0xFF1E293B),
+            border: Border(bottom: BorderSide(color: Colors.white12)),
+          ),
+          child: Row(
+            children: [
+              const Icon(Icons.movie, color: Color(0xFF00E5FF), size: 20),
+              const SizedBox(width: 12),
+              const Text('Attach stickers to video:',
+                  style: TextStyle(color: Colors.white, fontSize: 14)),
+              const SizedBox(width: 12),
+              Expanded(
+                child: DropdownButtonFormField<String>(
+                  value: _selectedStickerVideoId,
+                  dropdownColor: const Color(0xFF0F172A),
+                  decoration: const InputDecoration(
+                    filled: true,
+                    fillColor: Color(0xFF0F172A),
+                    border: OutlineInputBorder(borderSide: BorderSide.none),
+                    contentPadding:
+                        EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                  ),
+                  style: const TextStyle(color: Colors.white),
+                  items: _channelVideos
+                      .map((v) => DropdownMenuItem(
+                            value: v['video_id']?.toString(),
+                            child: Text(
+                              v['title']?.toString() ?? 'Untitled',
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ))
+                      .toList(),
+                  onChanged: (v) =>
+                      setState(() => _selectedStickerVideoId = v),
+                ),
+              ),
+            ],
+          ),
+        ),
+        Expanded(
+          child: StickerEditorScreen(
+            channelId: widget.channelId,
+            videoId: _selectedStickerVideoId,
+          ),
+        ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -586,7 +694,7 @@ class _MonetizationDashboardScreenState
                           ? _buildAdSettingsView()
                           : _selectedTab == 2
                               ? _buildMembershipView()
-                              : StickerEditorScreen(channelId: widget.channelId),
+                              : _buildStickersView(),
                 ),
               ],
             ),

@@ -36,6 +36,21 @@ class PlayerVideo {
   final int uniqueViewers;
   final String? thumbnailUrl;
 
+  // 🚀 REPOST ATTRIBUTION: when this video is a repost, repostId points to the
+  // original video's mp_videos row (UUID). originalCreatorUid / originalChannelName
+  // / originalCreatorUrl describe the ORIGINAL creator so the UI can show
+  // "reposted from @originalChannelName" while the card itself is attributed to
+  // the reposter (creatorUid / channelName).
+  final String? repostId;
+  final String? originalCreatorUid;
+  final String? originalChannelName;
+  final String? originalCreatorUrl;
+  // The text video_id of the ORIGINAL video. Needed so a repost row can
+  // stream/thumbnail the original file (which lives on the original creator's
+  // node under its own video_id), even though the repost row has its own
+  // video_id used for feed tracking.
+  final String? originalVideoId;
+
   PlayerVideo({
     required this.videoId,
     required this.creatorUid,
@@ -69,7 +84,16 @@ class PlayerVideo {
     this.averageWatchPercentage = 0.0,
     this.uniqueViewers = 0,
     this.thumbnailUrl,
+    this.repostId,
+    this.originalCreatorUid,
+    this.originalChannelName,
+    this.originalCreatorUrl,
+    this.originalVideoId,
   });
+
+  /// True when this video is a repost (reposter is the creator, original is
+  /// referenced via repostId).
+  bool get isRepost => repostId != null && repostId!.isNotEmpty;
 
   /// Total reactions across all types
   int get totalReactions =>
@@ -130,6 +154,22 @@ class PlayerVideo {
       averageWatchPercentage: (json['average_watch_percentage'] ?? 0).toDouble(),
       uniqueViewers: json['unique_viewers_local'] ?? json['unique_viewers'] ?? 0,
       thumbnailUrl: json['thumbnail_url']?.toString(),
+      // 🚀 REPOST ATTRIBUTION: Supabase nests the parent row under the `original`
+      // key (PostgREST FK expansion on mp_videos!repost_id). We also accept flat
+      // fields for the local Postgres / manual payloads.
+      repostId: json['repost_id']?.toString(),
+      originalCreatorUid: (json['original'] is Map
+              ? json['original']['creator_uid']
+              : json['original_creator_uid'])?.toString(),
+      originalChannelName: (json['original'] is Map
+              ? json['original']['channel_name']
+              : json['original_channel_name'])?.toString(),
+      originalCreatorUrl: (json['original'] is Map
+              ? json['original']['creator_cloudflare_url']
+              : json['original_creator_url'])?.toString(),
+      originalVideoId: (json['original'] is Map
+              ? json['original']['video_id']
+              : json['original_video_id'])?.toString(),
     );
   }
 
@@ -169,5 +209,10 @@ class PlayerVideo {
         'average_watch_percentage': averageWatchPercentage,
         'unique_viewers': uniqueViewers,
         'thumbnail_url': thumbnailUrl,
+        'repost_id': repostId,
+        'original_creator_uid': originalCreatorUid,
+        'original_channel_name': originalChannelName,
+        'original_creator_url': originalCreatorUrl,
+        'original_video_id': originalVideoId,
       };
 }

@@ -2070,6 +2070,73 @@ void main() async {
     }
   });
 
+  // 🚀 WATCHER INTEREST ROUTE: records whether a watcher is interested or not
+  // interested in a video. Upserts into mp_watcher_interest (UNIQUE on
+  // video_id + watcher_uid) so a watcher can change their mind. `interested`
+  // in the payload is tri-state: true -> 'interested', false -> 'not_interested',
+  // null -> delete the row (clear feedback).
+  router.post('/player/video/interest', (Request req) async {
+    try {
+      final payload = await req.readAsString();
+      final data = jsonDecode(payload);
+      final String vid = data['video_id'].toString();
+      final String watcherUid = data['watcher_uid'].toString();
+      final String? creatorUid = data['creator_uid']?.toString();
+      final bool? interested = data['interested'];
+
+      final connection = await Connection.open(
+        Endpoint(host: 'db', port: 5432, database: 'postgres', username: 'postgres', password: 'GuptikSystemPassword2026'),
+        settings: const ConnectionSettings(sslMode: SslMode.disable),
+      );
+
+      if (interested == null) {
+        // Clear feedback
+        await connection.execute(
+          Sql.named('DELETE FROM mp_watcher_interest WHERE video_id = @vid AND watcher_uid = @wuid'),
+          parameters: {'vid': vid, 'wuid': watcherUid},
+        );
+      } else {
+        final String interest = interested ? 'interested' : 'not_interested';
+        await connection.execute(
+          Sql.named("""
+            INSERT INTO mp_watcher_interest (video_id, creator_uid, watcher_uid, interest)
+            VALUES (@vid, @cuid, @wuid, @interest)
+            ON CONFLICT (video_id, watcher_uid)
+            DO UPDATE SET interest = @interest, created_at = NOW()
+          """),
+          parameters: {'vid': vid, 'cuid': creatorUid, 'wuid': watcherUid, 'interest': interest},
+        );
+      }
+
+      await connection.close();
+      return Response(200, body: jsonEncode({'status': 'saved'}), headers: {'Content-Type': 'application/json'});
+    } catch (e) {
+      return Response(500, body: 'Interest Error: $e');
+    }
+  });
+
+  // 🚀 WATCHER INTEREST GET: fetch the watcher's interest state for a video.
+  // Returns 404 (empty body) when no record exists so the client can treat
+  // null as "no feedback yet".
+  router.get('/player/video/interest/<videoId>/<watcherUid>', (Request req, String videoId, String watcherUid) async {
+    try {
+      final connection = await Connection.open(
+        Endpoint(host: 'db', port: 5432, database: 'postgres', username: 'postgres', password: 'GuptikSystemPassword2026'),
+        settings: const ConnectionSettings(sslMode: SslMode.disable),
+      );
+      final result = await connection.execute(
+        Sql.named('SELECT interest FROM mp_watcher_interest WHERE video_id = @vid AND watcher_uid = @wuid LIMIT 1'),
+        parameters: {'vid': videoId, 'wuid': watcherUid},
+      );
+      await connection.close();
+      if (result.isEmpty) return Response(404, body: '');
+      final interest = result.first.first?.toString();
+      return Response(200, body: jsonEncode({'interested': interest == 'interested'}), headers: {'Content-Type': 'application/json'});
+    } catch (e) {
+      return Response(500, body: 'Interest Fetch Error: $e');
+    }
+  });
+
   // 🚀 C. Toggle Subscription (Subscribe / Unsubscribe)
   router.post('/channel/subscribe/toggle', (Request req) async {
     try {

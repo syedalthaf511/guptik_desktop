@@ -19,11 +19,16 @@ class PlayerApiService {
   Future<List<PlayerVideo>> fetchNetworkFeed() async {
     try {
       final supabase = Supabase.instance.client;
-      
-      // Query the global mp_videos table, sorted by newest first
+
+      // Query the global mp_videos table, sorted by newest first.
+      // 🚀 REPOST ATTRIBUTION: `original:mp_videos!repost_id` expands the
+      // parent row (the original video this one re-posted) so the client can
+      // show "reposted from @originalChannelName" while attributing the card
+      // to the reposter (creator_uid of this row). PostgREST names the FK
+      // relationship automatically from the `repost_id` column.
       final response = await supabase
           .from('mp_videos')
-          .select()
+          .select('*, original:mp_videos!repost_id(*)')
           .order('published_at', ascending: false);
       
       // Map the JSON response to our strict PlayerVideo model.
@@ -371,7 +376,91 @@ class PlayerApiService {
     return false;
   }
 
- /// Toggles the subscription on the creator's node AND syncs to Admin Supabase
+  /// 🚀 WATCHER INTEREST: Records whether a watcher is interested in a video.
+  /// Writes to the user's local Postgres `mp_video_interests` table via the
+  /// Docker gateway `/player/video/interest` endpoint. `interested` is a
+  /// tri-state: true (interested), false (not interested), or null (cleared).
+  Future<bool> setVideoInterest({
+    required String videoId,
+    required String creatorUid,
+    required String watcherUid,
+    required bool? interested,
+  }) async {
+    if (gatewayUrl == null) return false;
+    try {
+      final safeUrl = gatewayUrl!.startsWith('http') ? gatewayUrl : 'https://$gatewayUrl';
+      final response = await http.post(
+        Uri.parse('$safeUrl/player/video/interest'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'video_id': videoId,
+          'creator_uid': creatorUid,
+          'watcher_uid': watcherUid,
+          'interested': interested,
+        }),
+      );
+      return response.statusCode == 200;
+    } catch (e) {
+      debugPrint('Interest Error: $e');
+      return false;
+    }
+  }
+
+  /// Fetches the watcher's interest state for a video (interested / not
+  /// interested / null). Returns null when no record exists.
+  Future<bool?> fetchVideoInterest({
+    required String videoId,
+    required String watcherUid,
+  }) async {
+    if (gatewayUrl == null) return null;
+    try {
+      final safeUrl = gatewayUrl!.startsWith('http') ? gatewayUrl : 'https://$gatewayUrl';
+      final response = await http.get(
+        Uri.parse('$safeUrl/player/video/interest/$videoId/$watcherUid'),
+        headers: {'Content-Type': 'application/json'},
+      );
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        if (data == null) return null;
+        return data['interested'] as bool?;
+      }
+      return null;
+    } catch (e) {
+      debugPrint('Fetch Interest Error: $e');
+      return null;
+    }
+  }
+
+  /// 🚀 REPORT: Submits a report for a video to the ADMIN Supabase `mp_reports`
+  /// table. This is NOT P2P — reports are centralized so platform admins can
+  /// review them. Returns true on success.
+  Future<bool> reportVideo({
+    required String videoId,
+    required String reportType,
+    String? description,
+    String? imageUrl,
+  }) async {
+    try {
+      final supabase = Supabase.instance.client;
+      final currentUser = supabase.auth.currentUser;
+      if (currentUser == null) return false;
+
+      await supabase.from('mp_reports').insert({
+        'by_user': currentUser.id,
+        'video_id': videoId,
+        'type': reportType,
+        'description': description ?? '',
+        'image_url': imageUrl,
+        'status': 'new',
+      });
+      return true;
+    } catch (e) {
+      debugPrint('Report Error: $e');
+      return false;
+    }
+  }
+
+  /// Toggles the subscription on the creator's node AND syncs to Admin Supabase
   Future<bool?> toggleSubscription(String nodeUrl, String channelId, String subscriberUid) async {
     try {
       final safeUrl = nodeUrl.startsWith('http') ? nodeUrl : 'https://$nodeUrl';

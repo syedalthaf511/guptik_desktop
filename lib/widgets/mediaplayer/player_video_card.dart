@@ -220,15 +220,42 @@ class _PlayerVideoCardState extends State<PlayerVideoCard> {
                             ),
                             const SizedBox(height: 6),
                             Text(
-                              widget.video.channelName, 
+                              widget.video.channelName,
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: TextStyle(color: Colors.grey.shade400, fontSize: 14),
                             ),
+                            // 🚀 REPOST ATTRIBUTION: show the original creator the
+                            // reposter re-shared from, so the card is attributed to
+                            // the reposter (channelName) while surfacing "reposted
+                            // from @originalChannelName" beneath it.
+                            if (widget.video.isRepost &&
+                                (widget.video.originalChannelName?.isNotEmpty ??
+                                    false)) ...[
+                              const SizedBox(height: 2),
+                              Row(
+                                children: [
+                                  Icon(Icons.repeat, size: 11, color: Color(0xFF00E5FF).withAlpha(180)),
+                                  const SizedBox(width: 3),
+                                  Flexible(
+                                    child: Text(
+                                      'Reposted from @${widget.video.originalChannelName}',
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                        color: Color(0xFF00E5FF).withAlpha(200),
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.w500,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
                             const SizedBox(height: 2),
                             Text(
-                              '${_formatViews(_liveViews)} views • ${_getTimeAgo(widget.video.createdAt)}', 
-                              maxLines: 1, 
+                              '${_formatViews(_liveViews)} views • ${_getTimeAgo(widget.video.createdAt)}',
+                              maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: TextStyle(color: Colors.grey.shade400, fontSize: 13),
                             ),

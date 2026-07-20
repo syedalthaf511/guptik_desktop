@@ -1,14 +1,25 @@
+import 'dart:io';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
-import '../../models/mediaplayer/video_sticker_model.dart';
+import 'package:file_picker/file_picker.dart';
 import '../../services/mediaplayer/player_monetization_service.dart';
+import '../../utils/mediaplayer/background_remover.dart';
 
-/// StickerEditorScreen — In-video product/service placement editor.
-/// Allows creators to add, position, and manage clickable product stickers
-/// that appear at specific timestamps during video playback.
+/// StickerEditorScreen — Creator-facing editor for in-video shoppable stickers.
+///
+/// Lets a creator add a product sticker with: title, description, MRP, sale
+/// price, show timing (timestamp in video), link URL, and image. The image can
+/// be run through the background remover so it composites cleanly over video
+/// (YouTube/IG-style). Stickers are persisted via [PlayerMonetizationService].
 class StickerEditorScreen extends StatefulWidget {
   final String channelId;
+  final String? videoId;
 
-  const StickerEditorScreen({super.key, required this.channelId});
+  const StickerEditorScreen({
+    super.key,
+    required this.channelId,
+    this.videoId,
+  });
 
   @override
   State<StickerEditorScreen> createState() => _StickerEditorScreenState();
@@ -16,124 +27,151 @@ class StickerEditorScreen extends StatefulWidget {
 
 class _StickerEditorScreenState extends State<StickerEditorScreen> {
   final PlayerMonetizationService _service = PlayerMonetizationService();
-  final TextEditingController _videoIdController = TextEditingController();
-  final TextEditingController _nameController = TextEditingController();
-  final TextEditingController _priceController = TextEditingController();
-  final TextEditingController _timestampController = TextEditingController();
-  final TextEditingController _descController = TextEditingController();
-  final TextEditingController _linkController = TextEditingController();
 
-  List<VideoSticker> _stickers = [];
-  bool _isLoading = false;
-  String _stickerType = 'product';
+  final _titleController = TextEditingController();
+  final _descController = TextEditingController();
+  final _mrpController = TextEditingController();
+  final _saleController = TextEditingController();
+  final _linkController = TextEditingController();
+  final _timingController = TextEditingController(text: '0');
+  final _durationController = TextEditingController(text: '8');
+
+  File? _pickedImage;
+  Uint8List? _processedImageBytes; // after bg removal
+  bool _bgRemoved = false;
+  bool _isSaving = false;
+  String _currency = 'USD';
 
   @override
   void dispose() {
-    _videoIdController.dispose();
-    _nameController.dispose();
-    _priceController.dispose();
-    _timestampController.dispose();
+    _titleController.dispose();
     _descController.dispose();
+    _mrpController.dispose();
+    _saleController.dispose();
     _linkController.dispose();
+    _timingController.dispose();
+    _durationController.dispose();
     super.dispose();
   }
 
-  Future<void> _loadStickers() async {
-    if (_videoIdController.text.trim().isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-            content: Text('Enter a video ID to load stickers.'),
-            backgroundColor: Colors.orange),
-      );
-      return;
-    }
-    setState(() => _isLoading = true);
-    final stickers =
-        await _service.fetchStickers(_videoIdController.text.trim());
-    if (mounted) {
+  Future<void> _pickImage() async {
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.image,
+    );
+    if (result != null && result.files.single.path != null) {
+      final file = File(result.files.single.path!);
+      final bytes = await file.readAsBytes();
       setState(() {
-        _stickers = stickers;
-        _isLoading = false;
+        _pickedImage = file;
+        _processedImageBytes = bytes;
+        _bgRemoved = false;
       });
     }
   }
 
-  Future<void> _addSticker() async {
-    if (_nameController.text.trim().isEmpty ||
-        _videoIdController.text.trim().isEmpty) {
+  /// Runs the background remover on the picked image (white backdrop removal).
+  Future<void> _removeBackground() async {
+    if (_pickedImage == null) return;
+    final bytes = await _pickedImage!.readAsBytes();
+    final out = BackgroundRemover.removeColorFromBytes(
+      bytes,
+      target: const Color(0xFFFFFFFF),
+      tolerance: 70,
+    );
+    setState(() {
+      _processedImageBytes = out;
+      _bgRemoved = true;
+    });
+    if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-            content: Text('Please enter video ID and sticker name.'),
-            backgroundColor: Colors.redAccent),
+          content: Text('Background removed — sticker is now transparent.'),
+          backgroundColor: Colors.green,
+        ),
+      );
+    }
+  }
+
+  Future<void> _saveSticker() async {
+    final title = _titleController.text.trim();
+    final mrp = double.tryParse(_mrpController.text.trim()) ?? 0;
+    final sale = double.tryParse(_saleController.text.trim()) ?? 0;
+    final timing = double.tryParse(_timingController.text.trim()) ?? 0;
+    final duration = double.tryParse(_durationController.text.trim()) ?? 8;
+
+    if (title.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Title is required.'), backgroundColor: Colors.orange),
+      );
+      return;
+    }
+    if (widget.videoId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No video selected for this sticker.'), backgroundColor: Colors.orange),
       );
       return;
     }
 
-    final ts = double.tryParse(_timestampController.text.trim()) ?? 0.0;
-    final price = double.tryParse(_priceController.text.trim());
+    setState(() => _isSaving = true);
 
-    String? stickerId;
-    if (_stickerType == 'product') {
-      stickerId = await _service.addProductSticker(
-        videoId: _videoIdController.text.trim(),
-        productName: _nameController.text.trim(),
-        timestampInVideo: ts,
-        price: price,
-        description: _descController.text.trim(),
-        linkUrl: _linkController.text.trim().isNotEmpty
-            ? _linkController.text.trim()
-            : null,
-      );
-    } else {
-      stickerId = await _service.addServiceSticker(
-        videoId: _videoIdController.text.trim(),
-        serviceName: _nameController.text.trim(),
-        timestampInVideo: ts,
-        price: price,
-        description: _descController.text.trim(),
-      );
+    // Persist the (optionally bg-removed) image to a local path so the player
+    // can load it. In production this would upload to storage; here we write a
+    // temp file and store its path in image_path.
+    String? imagePath = _pickedImage?.path;
+    if (_processedImageBytes != null && _bgRemoved) {
+      try {
+        final tmp = File(
+          '${_pickedImage!.path}.nobg.png',
+        );
+        await tmp.writeAsBytes(_processedImageBytes!);
+        imagePath = tmp.path;
+      } catch (_) {
+        imagePath = _pickedImage?.path;
+      }
     }
 
-    if (stickerId != null && mounted) {
+    final ok = await _service.addProductSticker(
+      videoId: widget.videoId!,
+      productName: title,
+      timestampInVideo: timing,
+      price: sale,
+      currency: _currency,
+      description: _descController.text.trim(),
+      linkUrl: _linkController.text.trim().isEmpty
+          ? null
+          : _linkController.text.trim(),
+      imagePath: imagePath,
+      mrp: mrp,
+      durationOnScreen: duration,
+    );
+
+    if (mounted) {
+      setState(() => _isSaving = false);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-            content: Text('$_stickerType sticker added successfully!'),
-            backgroundColor: Colors.green),
+          content: Text(ok != null
+              ? 'Sticker added! It will appear at ${timing}s in the video.'
+              : 'Failed to add sticker.'),
+          backgroundColor: ok != null ? Colors.green : Colors.redAccent,
+        ),
       );
-      _nameController.clear();
-      _priceController.clear();
-      _timestampController.clear();
-      _descController.clear();
-      _linkController.clear();
-      _loadStickers();
-    } else if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-            content: Text('Failed to add sticker.'),
-            backgroundColor: Colors.redAccent),
-      );
+      if (ok != null) _resetForm();
     }
   }
 
-  Future<void> _removeSticker(VideoSticker sticker) async {
-    final success =
-        await _service.removeSticker(sticker.stickerId, sticker.stickerType);
-    if (success && mounted) {
-      setState(() {
-        _stickers.removeWhere((s) => s.stickerId == sticker.stickerId);
-      });
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-            content: Text('Sticker removed.'),
-            backgroundColor: Colors.orange),
-      );
-    }
-  }
-
-  String _formatTimestamp(double seconds) {
-    final mins = (seconds ~/ 60).toString().padLeft(2, '0');
-    final secs = (seconds % 60).toStringAsFixed(0).padLeft(2, '0');
-    return '$mins:$secs';
+  void _resetForm() {
+    _titleController.clear();
+    _descController.clear();
+    _mrpController.clear();
+    _saleController.clear();
+    _linkController.clear();
+    _timingController.text = '0';
+    _durationController.text = '8';
+    setState(() {
+      _pickedImage = null;
+      _processedImageBytes = null;
+      _bgRemoved = false;
+    });
   }
 
   @override
@@ -143,55 +181,37 @@ class _StickerEditorScreenState extends State<StickerEditorScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text('In-Video Sticker Editor',
-              style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 26,
-                  fontWeight: FontWeight.bold)),
-          const SizedBox(height: 8),
-          const Text(
-              'Add clickable product/service placements that appear at specific timestamps in your videos.',
-              style: TextStyle(color: Colors.grey, fontSize: 14)),
-          const SizedBox(height: 24),
-
-          // Video ID input + load button
           Row(
             children: [
-              Expanded(
-                child: TextField(
-                  controller: _videoIdController,
-                  style: const TextStyle(color: Colors.white),
-                  decoration: const InputDecoration(
-                    labelText: 'Video ID',
-                    labelStyle: TextStyle(color: Colors.grey),
-                    filled: true,
-                    fillColor: Color(0xFF1E293B),
-                    border: OutlineInputBorder(borderSide: BorderSide.none),
-                  ),
+              const Text('In-Video Stickers',
+                  style: TextStyle(color: Colors.white, fontSize: 26, fontWeight: FontWeight.bold)),
+              const Spacer(),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF00E5FF).withAlpha(20),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(color: const Color(0xFF00E5FF).withAlpha(120)),
                 ),
-              ),
-              const SizedBox(width: 12),
-              ElevatedButton.icon(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF00E5FF),
-                  foregroundColor: Colors.black,
+                child: const Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.shopping_bag, color: Color(0xFF00E5FF), size: 16),
+                    SizedBox(width: 6),
+                    Text('Shoppable', style: TextStyle(color: Color(0xFF00E5FF), fontSize: 12, fontWeight: FontWeight.bold)),
+                  ],
                 ),
-                onPressed: _isLoading ? null : _loadStickers,
-                icon: _isLoading
-                    ? const SizedBox(
-                        width: 18,
-                        height: 18,
-                        child: CircularProgressIndicator(strokeWidth: 2))
-                    : const Icon(Icons.refresh, size: 18),
-                label: const Text('Load Stickers'),
               ),
             ],
           ),
+          const SizedBox(height: 8),
+          const Text('Add product stickers that appear over your video at a chosen time.',
+              style: TextStyle(color: Colors.grey, fontSize: 14)),
           const SizedBox(height: 24),
 
-          // Sticker type toggle
+          // Image picker + bg remover
           Container(
-            padding: const EdgeInsets.all(16),
+            padding: const EdgeInsets.all(20),
             decoration: BoxDecoration(
               color: const Color(0xFF1E293B),
               borderRadius: BorderRadius.circular(12),
@@ -200,204 +220,191 @@ class _StickerEditorScreenState extends State<StickerEditorScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text('Add New Sticker',
-                    style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold)),
-                const SizedBox(height: 16),
-                // Type toggle
-                Row(
-                  children: [
-                    ChoiceChip(
-                      label: const Text('Product'),
-                      selected: _stickerType == 'product',
-                      selectedColor: const Color(0xFF00E5FF),
-                      onSelected: (val) =>
-                          setState(() => _stickerType = 'product'),
-                    ),
-                    const SizedBox(width: 12),
-                    ChoiceChip(
-                      label: const Text('Service'),
-                      selected: _stickerType == 'service',
-                      selectedColor: const Color(0xFF00E5FF),
-                      onSelected: (val) =>
-                          setState(() => _stickerType = 'service'),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 16),
-                // Name
-                TextField(
-                  controller: _nameController,
-                  style: const TextStyle(color: Colors.white),
-                  decoration: InputDecoration(
-                    labelText: _stickerType == 'product'
-                        ? 'Product Name'
-                        : 'Service Name',
-                    labelStyle: const TextStyle(color: Colors.grey),
-                    filled: true,
-                    fillColor: const Color(0xFF0F172A),
-                    border: const OutlineInputBorder(borderSide: BorderSide.none),
-                  ),
-                ),
+                const Text('Sticker Image', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
                 const SizedBox(height: 12),
-                // Timestamp + Price
                 Row(
                   children: [
-                    Expanded(
-                      child: TextField(
-                        controller: _timestampController,
-                        style: const TextStyle(color: Colors.white),
-                        keyboardType: TextInputType.number,
-                        decoration: const InputDecoration(
-                          labelText: 'Timestamp (seconds)',
-                          labelStyle: TextStyle(color: Colors.grey),
-                          filled: true,
-                          fillColor: Color(0xFF0F172A),
-                          border: OutlineInputBorder(borderSide: BorderSide.none),
-                        ),
+                    Container(
+                      width: 120,
+                      height: 120,
+                      decoration: BoxDecoration(
+                        color: Colors.white10,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Colors.white12),
                       ),
+                      child: _processedImageBytes != null
+                          ? ClipRRect(
+                              borderRadius: BorderRadius.circular(12),
+                              child: Image.memory(_processedImageBytes!, fit: BoxFit.cover),
+                            )
+                          : const Center(
+                              child: Icon(Icons.image, color: Colors.grey, size: 36),
+                            ),
                     ),
-                    const SizedBox(width: 12),
+                    const SizedBox(width: 16),
                     Expanded(
-                      child: TextField(
-                        controller: _priceController,
-                        style: const TextStyle(color: Colors.white),
-                        keyboardType: TextInputType.number,
-                        decoration: const InputDecoration(
-                          labelText: 'Price (USD)',
-                          labelStyle: TextStyle(color: Colors.grey),
-                          filled: true,
-                          fillColor: Color(0xFF0F172A),
-                          border: OutlineInputBorder(borderSide: BorderSide.none),
-                        ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          ElevatedButton.icon(
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: const Color(0xFF00E5FF),
+                              foregroundColor: Colors.black,
+                            ),
+                            onPressed: _pickImage,
+                            icon: const Icon(Icons.upload, size: 18),
+                            label: const Text('Pick Image'),
+                          ),
+                          const SizedBox(height: 10),
+                          ElevatedButton.icon(
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: _bgRemoved
+                                  ? Colors.green
+                                  : const Color(0xFF1E293B),
+                              foregroundColor: _bgRemoved ? Colors.white : const Color(0xFF00E5FF),
+                              side: const BorderSide(color: Color(0xFF00E5FF)),
+                            ),
+                            onPressed: _pickedImage == null ? null : _removeBackground,
+                            icon: const Icon(Icons.auto_fix_high, size: 18),
+                            label: Text(_bgRemoved ? 'Background Removed' : 'Remove Background'),
+                          ),
+                          if (_bgRemoved)
+                            const Padding(
+                              padding: EdgeInsets.only(top: 8),
+                              child: Text('Transparent PNG ready for video overlay.',
+                                  style: TextStyle(color: Colors.greenAccent, fontSize: 12)),
+                            ),
+                        ],
                       ),
                     ),
                   ],
-                ),
-                const SizedBox(height: 12),
-                // Link (products only)
-                if (_stickerType == 'product') ...[
-                  TextField(
-                    controller: _linkController,
-                    style: const TextStyle(color: Colors.white),
-                    decoration: const InputDecoration(
-                      labelText: 'Product Link URL (optional)',
-                      labelStyle: TextStyle(color: Colors.grey),
-                      filled: true,
-                      fillColor: Color(0xFF0F172A),
-                      border: OutlineInputBorder(borderSide: BorderSide.none),
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                ],
-                // Description
-                TextField(
-                  controller: _descController,
-                  style: const TextStyle(color: Colors.white),
-                  maxLines: 2,
-                  decoration: const InputDecoration(
-                    labelText: 'Description (optional)',
-                    labelStyle: TextStyle(color: Colors.grey),
-                    filled: true,
-                    fillColor: Color(0xFF0F172A),
-                    border: OutlineInputBorder(borderSide: BorderSide.none),
-                  ),
-                ),
-                const SizedBox(height: 16),
-                SizedBox(
-                  width: double.infinity,
-                  height: 48,
-                  child: ElevatedButton.icon(
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF00E5FF),
-                      foregroundColor: Colors.black,
-                    ),
-                    onPressed: _addSticker,
-                    icon: const Icon(Icons.add_shopping_cart, size: 18),
-                    label: const Text('Add Sticker',
-                        style: TextStyle(fontWeight: FontWeight.bold)),
-                  ),
                 ),
               ],
             ),
           ),
-          const SizedBox(height: 32),
+          const SizedBox(height: 20),
 
-          // Existing stickers list
-          if (_stickers.isNotEmpty) ...[
-            const Text('Active Stickers',
-                style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold)),
-            const SizedBox(height: 12),
-            ..._stickers.map((sticker) => Container(
-                  margin: const EdgeInsets.only(bottom: 12),
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF1E293B),
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: Colors.white12),
-                  ),
-                  child: Row(
-                    children: [
-                      Icon(
-                        sticker.stickerType == 'product'
-                            ? Icons.shopping_bag
-                            : Icons.handshake,
-                        color: const Color(0xFF00E5FF),
-                        size: 20,
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(sticker.name,
-                                style: const TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 14,
-                                    fontWeight: FontWeight.w500)),
-                            const SizedBox(height: 4),
-                            Text(
-                              '${_formatTimestamp(sticker.timestampInVideo)} • ${sticker.stickerType} • ${sticker.clickCount} clicks • ${sticker.conversionRate.toStringAsFixed(1)}% conversion',
-                              style: TextStyle(
-                                  color: Colors.grey.shade400, fontSize: 12),
-                            ),
-                          ],
-                        ),
-                      ),
-                      if (sticker.price != null)
-                        Text('\$${sticker.price!.toStringAsFixed(2)}',
-                            style: const TextStyle(
-                                color: Colors.green,
-                                fontSize: 16,
-                                fontWeight: FontWeight.bold)),
-                      const SizedBox(width: 12),
-                      IconButton(
-                        icon: const Icon(Icons.delete, color: Colors.redAccent, size: 18),
-                        onPressed: () => _removeSticker(sticker),
-                      ),
-                    ],
-                  ),
-                )),
-          ] else if (!_isLoading && _videoIdController.text.isNotEmpty) ...[
-            Container(
-              padding: const EdgeInsets.all(32),
-              decoration: BoxDecoration(
-                color: const Color(0xFF1E293B),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: const Center(
-                child: Text('No active stickers for this video.',
-                    style: TextStyle(color: Colors.grey, fontSize: 14)),
-              ),
+          // Product fields
+          Container(
+            padding: const EdgeInsets.all(20),
+            decoration: BoxDecoration(
+              color: const Color(0xFF1E293B),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.white12),
             ),
-          ],
+            child: Column(
+              children: [
+                _field('Product Title', _titleController, 'e.g. Wireless Earbuds'),
+                const SizedBox(height: 16),
+                _field('Description', _descController, 'Short product blurb…', maxLines: 3),
+                const SizedBox(height: 16),
+                Row(
+                  children: [
+                    Expanded(
+                      child: _field('MRP', _mrpController, '29.99',
+                          keyboard: TextInputType.number),
+                    ),
+                    const SizedBox(width: 16),
+                    Expanded(
+                      child: _field('Sale Price', _saleController, '19.99',
+                          keyboard: TextInputType.number),
+                    ),
+                    const SizedBox(width: 16),
+                    SizedBox(
+                      width: 110,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text('Currency', style: TextStyle(color: Colors.grey, fontSize: 12)),
+                          const SizedBox(height: 6),
+                          DropdownButtonFormField<String>(
+                            initialValue: _currency,
+                            dropdownColor: const Color(0xFF0F172A),
+                            decoration: const InputDecoration(
+                              filled: true,
+                              fillColor: Color(0xFF0F172A),
+                              border: OutlineInputBorder(borderSide: BorderSide.none),
+                            ),
+                            style: const TextStyle(color: Colors.white),
+                            items: const ['USD', 'EUR', 'GBP', 'INR']
+                                .map((c) => DropdownMenuItem(value: c, child: Text(c)))
+                                .toList(),
+                            onChanged: (v) => setState(() => _currency = v ?? 'USD'),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                _field('Product Link URL', _linkController, 'https://…'),
+                const SizedBox(height: 16),
+                Row(
+                  children: [
+                    Expanded(
+                      child: _field('Show Timing (sec)', _timingController, '0',
+                          keyboard: TextInputType.number),
+                    ),
+                    const SizedBox(width: 16),
+                    Expanded(
+                      child: _field('Visible For (sec)', _durationController, '8',
+                          keyboard: TextInputType.number),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 24),
+          SizedBox(
+            width: double.infinity,
+            height: 52,
+            child: ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF00E5FF),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+              onPressed: _isSaving ? null : _saveSticker,
+              icon: _isSaving
+                  ? const SizedBox(
+                      width: 18, height: 18,
+                      child: CircularProgressIndicator(color: Colors.black, strokeWidth: 2),
+                    )
+                  : const Icon(Icons.add_shopping_cart, color: Colors.black),
+              label: Text(_isSaving ? 'Saving…' : 'Add Sticker to Video',
+                  style: const TextStyle(color: Colors.black, fontSize: 16, fontWeight: FontWeight.bold)),
+            ),
+          ),
         ],
       ),
+    );
+  }
+
+  Widget _field(String label, TextEditingController controller, String hint,
+      {int maxLines = 1, TextInputType keyboard = TextInputType.text}) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(label, style: const TextStyle(color: Colors.grey, fontSize: 12)),
+        const SizedBox(height: 6),
+        TextField(
+          controller: controller,
+          maxLines: maxLines,
+          keyboardType: keyboard,
+          style: const TextStyle(color: Colors.white),
+          decoration: InputDecoration(
+            hintText: hint,
+            hintStyle: const TextStyle(color: Colors.grey),
+            filled: true,
+            fillColor: const Color(0xFF0F172A),
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide.none),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(8),
+              borderSide: const BorderSide(color: Color(0xFF00E5FF)),
+            ),
+          ),
+        ),
+      ],
     );
   }
 }

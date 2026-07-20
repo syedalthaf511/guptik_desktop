@@ -64,6 +64,57 @@ class PostgresService {
         print("✅ DB Check: mp_videos audience columns are ready.");
       } catch (_) {}
 
+      // 🚀 REPOST ATTRIBUTION MIGRATION: add repost_id so a local mp_videos row
+      // can point to the original video it re-shared (self-reference). Existing
+      // installs get the column via self-healing; new installs include it in
+      // setupDefaultDatabase. Kept nullable because non-reposted videos have
+      // no parent. Mirrors the admin-side mp_videos.repost_id column.
+      try {
+        await _connection!.execute('ALTER TABLE mp_videos ADD COLUMN IF NOT EXISTS repost_id UUID;');
+        print("✅ DB Check: mp_videos.repost_id column is ready.");
+      } catch (_) {}
+
+      // 🚀 WATCHER INTEREST TABLE SELF-HEALING: stores per-watcher
+      // interested / not_interested feedback for the recommendation engine.
+      // UNIQUE(video_id, watcher_uid) lets a watcher change their mind via
+      // upsert. Drives the "Not Interested" feedback loop.
+      try {
+        await _connection!.execute('''
+          CREATE TABLE IF NOT EXISTS mp_watcher_interest (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            video_id TEXT NOT NULL,
+            creator_uid TEXT,
+            watcher_uid TEXT NOT NULL,
+            interest TEXT NOT NULL CHECK (interest IN ('interested','not_interested')),
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+            UNIQUE(video_id, watcher_uid)
+          )
+        ''');
+        await _connection!.execute('CREATE INDEX IF NOT EXISTS idx_mp_watcher_interest_watcher ON mp_watcher_interest(watcher_uid);');
+        print("✅ DB Check: mp_watcher_interest table is ready.");
+      } catch (_) {}
+
+      // 🚀 REPORTS TABLE SELF-HEALING:
+      // Local copy of reports filed by this user, mirrored to admin Supabase
+      // mp_reports. Lets the user see "My Reports" and retry failed uploads.
+      try {
+        await _connection!.execute('''
+          CREATE TABLE IF NOT EXISTS mp_reports (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            by_user TEXT NOT NULL,
+            video_id TEXT NOT NULL,
+            type TEXT NOT NULL,
+            description TEXT,
+            image_url TEXT,
+            status TEXT DEFAULT 'new',
+            synced_to_admin BOOLEAN DEFAULT FALSE,
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+            updated_at TIMESTAMPTZ DEFAULT NOW()
+          )
+        ''');
+        print("✅ DB Check: mp_reports table is ready.");
+      } catch (_) {}
+
     } catch (e) {
       print("❌ Database Connection Failed: $e");
     }
@@ -761,6 +812,50 @@ class PostgresService {
       await conn.execute("ALTER TABLE mp_videos ADD COLUMN IF NOT EXISTS age_rating TEXT DEFAULT 'all';");
       print("✅ DB Check: mp_videos audience columns are ready.");
     } catch (_) {}
+
+    // 🚀 REPOST ATTRIBUTION: repost_id self-references mp_videos(id). NULL for
+    // original uploads; set to the original video's id when this row is a
+    // repost. Added via ALTER for existing installs (self-healing above) and
+    // here for fresh installs.
+    try {
+      await conn.execute('ALTER TABLE mp_videos ADD COLUMN IF NOT EXISTS repost_id UUID;');
+      print("✅ DB Check: mp_videos.repost_id column is ready.");
+    } catch (_) {}
+
+    // -------------------------------------------------------------
+    // 🚀 WATCHER INTEREST: per-watcher interested / not_interested feedback.
+    // -------------------------------------------------------------
+    await conn.execute('''
+      CREATE TABLE IF NOT EXISTS mp_watcher_interest (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        video_id TEXT NOT NULL,
+        creator_uid TEXT,
+        watcher_uid TEXT NOT NULL,
+        interest TEXT NOT NULL CHECK (interest IN ('interested','not_interested')),
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        UNIQUE(video_id, watcher_uid)
+      )
+    ''');
+    await conn.execute('CREATE INDEX IF NOT EXISTS idx_mp_watcher_interest_watcher ON mp_watcher_interest(watcher_uid)');
+
+    // -------------------------------------------------------------
+    // 🚀 REPORTS: local copy of reports filed by this user, mirrored to the
+    // admin Supabase `mp_reports` table.
+    // -------------------------------------------------------------
+    await conn.execute('''
+      CREATE TABLE IF NOT EXISTS mp_reports (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        by_user TEXT NOT NULL,
+        video_id TEXT NOT NULL,
+        type TEXT NOT NULL,
+        description TEXT,
+        image_url TEXT,
+        status TEXT DEFAULT 'new',
+        synced_to_admin BOOLEAN DEFAULT FALSE,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    ''');
 
     // -------------------------------------------------------------
     // 🚀 CHANNEL SUBSCRIPTIONS TRACKER

@@ -14,6 +14,7 @@ import 'playlist_management_screen.dart';
 import 'notifications_screen.dart';
 import 'monetization_dashboard_screen.dart';
 import 'desktop_system_folder_screen.dart';
+import 'reports_screen.dart';
 
 class DesktopMediaHomeScreen extends StatefulWidget {
   final String gatewayUrl; 
@@ -520,6 +521,41 @@ class _DesktopMediaHomeScreenState extends State<DesktopMediaHomeScreen> {
                       context,
                       MaterialPageRoute(
                         builder: (_) => const NotificationsScreen(),
+                      ),
+                    );
+                  },
+                ),
+
+                // 🚀 NEW: Reposts — opens repost folder
+                _buildSidebarItem(
+                  icon: Icons.repeat_rounded,
+                  label: 'Reposts',
+                  index: 9,
+                  customOnTap: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => const DesktopSystemFolderScreen(
+                          folderType: 'repost',
+                          folderTitle: 'Repost Videos',
+                          folderIcon: Icons.repeat_rounded,
+                          folderColor: Color(0xFF00E5FF),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+
+                // 🚀 NEW: Reports — opens the user's filed reports
+                _buildSidebarItem(
+                  icon: Icons.flag_outlined,
+                  label: 'Reports',
+                  index: 10,
+                  customOnTap: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => const ReportsScreen(),
                       ),
                     );
                   },
