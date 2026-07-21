@@ -42,7 +42,10 @@ class _DesktopMediaPlayerScreenState extends State<DesktopMediaPlayerScreen> wit
   late final PlayerApiService _apiService;
   late final AnimationController _shakeController;
   late final Animation<double> _shakeAnimation;
-  
+  // 🚀 Normalized creator gateway URL — used to fetch stickers (and stream)
+  // from the CREATOR's node so any viewer sees the creator's shoppable stickers.
+  late final String safeUrl;
+
   late int _currentLikes;
   late int _currentComments;
   late int _currentViews;
@@ -80,7 +83,7 @@ class _DesktopMediaPlayerScreenState extends State<DesktopMediaPlayerScreen> wit
     
     // 🚀 Normalize the URL: strips whitespace, and uses http:// for local
     // addresses (Docker gateway is plain HTTP) and https:// for tunnels.
-    final safeUrl = DockerService.normalizeGatewayUrl(widget.video.creatorUrl);
+    safeUrl = DockerService.normalizeGatewayUrl(widget.video.creatorUrl);
         
     debugPrint('🚨 SECURE STREAMING URL: $safeUrl');
     
@@ -822,7 +825,11 @@ class _DesktopMediaPlayerScreenState extends State<DesktopMediaPlayerScreen> wit
                               child: Stack(fit: StackFit.expand, children: [
                                 Video(controller: controller),
                                 PlayerControlsOverlay(player: player, controller: controller),
-                                StickerOverlay(player: player, videoId: widget.video.videoId),
+                                StickerOverlay(
+                                  player: player,
+                                  videoId: widget.video.videoId,
+                                  creatorUrl: safeUrl,
+                                ),
                                 if (_nodeUnreachable)
                                   Container(
                                     color: Colors.black.withAlpha(220),

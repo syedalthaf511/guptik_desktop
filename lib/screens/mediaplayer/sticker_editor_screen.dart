@@ -114,33 +114,26 @@ class _StickerEditorScreenState extends State<StickerEditorScreen> {
 
     setState(() => _isSaving = true);
 
-    // Persist the (optionally bg-removed) image to a local path so the player
-    // can load it. In production this would upload to storage; here we write a
-    // temp file and store its path in image_path.
-    String? imagePath = _pickedImage?.path;
-    if (_processedImageBytes != null && _bgRemoved) {
-      try {
-        final tmp = File(
-          '${_pickedImage!.path}.nobg.png',
-        );
-        await tmp.writeAsBytes(_processedImageBytes!);
-        imagePath = tmp.path;
-      } catch (_) {
-        imagePath = _pickedImage?.path;
-      }
+    // Upload the (optionally bg-removed) image to the SHARED store so that
+    // ANY viewer (not just the creator) can see the sticker. We pass the raw
+    // bytes; the service uploads them to Supabase Storage and stores the
+    // public URL. Falls back to a local file path if no image was picked.
+    Uint8List? imageBytes = _processedImageBytes;
+    if (imageBytes == null && _pickedImage != null) {
+      imageBytes = await _pickedImage!.readAsBytes();
     }
 
-    final ok = await _service.addProductSticker(
+    final ok = await _service.addProductStickerShared(
       videoId: widget.videoId!,
       productName: title,
       timestampInVideo: timing,
+      imageBytes: imageBytes,
       price: sale,
       currency: _currency,
       description: _descController.text.trim(),
       linkUrl: _linkController.text.trim().isEmpty
           ? null
           : _linkController.text.trim(),
-      imagePath: imagePath,
       mrp: mrp,
       durationOnScreen: duration,
     );

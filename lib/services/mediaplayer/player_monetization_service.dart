@@ -31,7 +31,45 @@ class PlayerMonetizationService {
   // =========================================================================
 
   /// Fetches all product/service stickers for a given video.
+  ///
+  /// Stickers are stored in a SHARED Supabase Storage location so that ANY
+  /// viewer (not just the creator) can see them — this is what makes a
+  /// sticker added by user A appear for user B. We fall back to the creator's
+  /// local Postgres node only if the shared store is unavailable.
   Future<List<VideoSticker>> fetchStickers(String videoId) async {
+    // 1) Preferred: shared store (visible to every viewer).
+    final shared = await fetchStickersShared(videoId);
+    if (shared.isNotEmpty) return shared;
+
+    // 2) Fallback: local Postgres (creator-only visibility).
+    return _fetchStickersLocal(videoId);
+  }
+
+  /// Reads sticker metadata from the shared Supabase Storage JSON blob
+  /// (`post_images/sticker_data/<videoId>.json`). Works cross-user because
+  /// the bucket is public.
+  Future<List<VideoSticker>> fetchStickersShared(String videoId) async {
+    try {
+      final supabase = Supabase.instance.client;
+      final path = 'sticker_data/$videoId.json';
+      final bytes = await supabase.storage.from('post_images').download(path);
+      if (bytes == null || bytes.isEmpty) return [];
+      final jsonStr = utf8.decode(bytes);
+      final list = jsonDecode(jsonStr) as List;
+      final stickers = list
+          .map((e) => VideoSticker.fromJson(e as Map<String, dynamic>))
+          .toList();
+      stickers.sort((a, b) =>
+          a.timestampInVideo.compareTo(b.timestampInVideo));
+      return stickers;
+    } catch (e) {
+      debugPrint('Fetch Shared Stickers Error: $e');
+      return [];
+    }
+  }
+
+  /// Local-only fallback (creator's own node). Kept for offline/legacy support.
+  Future<List<VideoSticker>> _fetchStickersLocal(String videoId) async {
     try {
       final conn = await _connect();
 
@@ -127,7 +165,7 @@ class PlayerMonetizationService {
 
       return stickers;
     } catch (e) {
-      debugPrint('Fetch Stickers Error: $e');
+      debugPrint('Fetch Stickers (local) Error: $e');
       return [];
     }
   }
@@ -188,6 +226,123 @@ class PlayerMonetizationService {
     } catch (e) {
       debugPrint('Add Product Sticker Error: $e');
       return null;
+    }
+  }
+
+  /// Adds a product sticker and makes it visible to EVERY viewer (not just the
+  /// creator) by storing it in the shared Supabase Storage location. The image
+  /// bytes are uploaded to the public `post_images` bucket and the metadata is
+  /// written to `sticker_data/<videoId>.json`. We also mirror to the creator's
+  /// local Postgres node so existing analytics/dashboards keep working.
+  ///
+  /// [imageBytes] are the (optionally bg-removed) PNG bytes of the sticker.
+  Future<String?> addProductStickerShared({
+    required String videoId,
+    required String productName,
+    required double timestampInVideo,
+    required Uint8List? imageBytes,
+    double? price,
+    String currency = 'USD',
+    String description = '',
+    String? linkUrl,
+    ClickableZone? clickableZone,
+    double mrp = 0,
+    double durationOnScreen = 8,
+  }) async {
+    final stickerId = DateTime.now().millisecondsSinceEpoch.toString();
+
+    // 1) Upload image to shared storage (public URL any viewer can load).
+    String? imageUrl = await _uploadStickerImage(videoId, imageBytes);
+
+    // 2) Build the sticker record.
+    final sticker = VideoSticker(
+      id: stickerId,
+      videoId: videoId,
+      productId: stickerId,
+      title: productName,
+      timestampInVideo: timestampInVideo,
+      durationOnScreen: durationOnScreen,
+      salePrice: price ?? 0,
+      mrp: mrp,
+      currency: currency,
+      description: description,
+      linkUrl: linkUrl,
+      imagePath: imageUrl, // now a public URL, not a local path
+      clickableZone: clickableZone,
+      isActive: true,
+      stickerType: 'product',
+    );
+
+    // 3) Persist to the shared JSON blob (append to existing list).
+    await _appendSharedSticker(videoId, sticker);
+
+    // 4) Mirror to local Postgres for creator-side analytics (best effort).
+    await addProductSticker(
+      videoId: videoId,
+      productName: productName,
+      timestampInVideo: timestampInVideo,
+      price: price,
+      currency: currency,
+      description: description,
+      linkUrl: linkUrl,
+      imagePath: imageUrl,
+      clickableZone: clickableZone,
+      mrp: mrp,
+      durationOnScreen: durationOnScreen,
+    );
+
+    return stickerId;
+  }
+
+  /// Uploads sticker image bytes to the public `post_images` bucket and
+  /// returns the public URL. Returns null if upload fails.
+  Future<String?> _uploadStickerImage(String videoId, Uint8List? bytes) async {
+    if (bytes == null || bytes.isEmpty) return null;
+    try {
+      final supabase = Supabase.instance.client;
+      final fileName =
+          'sticker_data/$videoId/${DateTime.now().millisecondsSinceEpoch}.png';
+      await supabase.storage.from('post_images').uploadBinary(
+            fileName,
+            bytes,
+            fileOptions: const FileOptions(
+                upsert: true, contentType: 'image/png'),
+          );
+      return supabase.storage.from('post_images').getPublicUrl(fileName);
+    } catch (e) {
+      debugPrint('Sticker image upload error: $e');
+      return null;
+    }
+  }
+
+  /// Appends a sticker to the shared `sticker_data/<videoId>.json` blob,
+  /// creating it if it doesn't exist.
+  Future<void> _appendSharedSticker(String videoId, VideoSticker sticker) async {
+    try {
+      final supabase = Supabase.instance.client;
+      final path = 'sticker_data/$videoId.json';
+
+      // Read existing list (if any).
+      List<dynamic> list = [];
+      try {
+        final existing = await supabase.storage.from('post_images').download(path);
+        if (existing != null && existing.isNotEmpty) {
+          list = jsonDecode(utf8.decode(existing)) as List;
+        }
+      } catch (_) {
+        // No existing blob yet — start fresh.
+      }
+
+      list.add(sticker.toJson());
+      final encoded = utf8.encode(jsonEncode(list));
+      await supabase.storage.from('post_images').uploadBinary(
+            path,
+            encoded,
+            fileOptions: const FileOptions(
+                upsert: true, contentType: 'application/json'),
+          );
+    } catch (e) {
+      debugPrint('Append shared sticker error: $e');
     }
   }
 

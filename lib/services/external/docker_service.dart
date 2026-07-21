@@ -1519,6 +1519,62 @@ void main() async {
     }
   });
 
+  // 4b. GET STICKERS ROUTE — returns the shoppable product stickers attached to
+  // a video so ANY viewer (not just the creator) can see them. Reads from the
+  // creator's local mp_sticker_products_catalog and returns the image as the
+  // stored public URL (already uploaded to shared storage by the editor).
+  router.get('/player/video/stickers/<videoId>', (Request req, String videoId) async {
+    try {
+      final connection = await Connection.open(
+        Endpoint(host: 'db', port: 5432, database: 'postgres', username: 'postgres', password: 'GuptikSystemPassword2026'),
+        settings: const ConnectionSettings(sslMode: SslMode.disable),
+      );
+
+      // Ensure the shoppable columns exist before selecting them.
+      await connection.execute("""
+        ALTER TABLE mp_sticker_products_catalog
+          ADD COLUMN IF NOT EXISTS mrp DECIMAL DEFAULT 0,
+          ADD COLUMN IF NOT EXISTS duration_on_screen DECIMAL DEFAULT 8
+      """);
+
+      final result = await connection.execute(
+        Sql.named("""
+          SELECT id, product_id, timestamp_in_video, duration_on_screen,
+                 clickable_zone, product_name, price, mrp, currency,
+                 description, link_url, image_path, is_active
+          FROM mp_sticker_products_catalog
+          WHERE video_id::text = @vid AND is_active = TRUE
+          ORDER BY timestamp_in_video ASC
+        """),
+        parameters: {'vid': videoId},
+      );
+      await connection.close();
+
+      final List<Map<String, dynamic>> stickers = [];
+      for (final row in result) {
+        stickers.add({
+          'id': row[0]?.toString() ?? '',
+          'product_id': row[1]?.toString() ?? '',
+          'timestamp_in_video': (row[2] is num) ? (row[2] as num).toDouble() : double.tryParse(row[2]?.toString() ?? '0') ?? 0.0,
+          'duration_on_screen': (row[3] is num) ? (row[3] as num).toDouble() : double.tryParse(row[3]?.toString() ?? '8') ?? 8.0,
+          'clickable_zone': row[4],
+          'product_name': row[5]?.toString() ?? 'Untitled',
+          'price': (row[6] is num) ? (row[6] as num).toDouble() : double.tryParse(row[6]?.toString() ?? '0') ?? 0.0,
+          'mrp': (row[7] is num) ? (row[7] as num).toDouble() : double.tryParse(row[7]?.toString() ?? '0') ?? 0.0,
+          'currency': row[8]?.toString() ?? 'USD',
+          'description': row[9]?.toString() ?? '',
+          'link_url': row[10]?.toString(),
+          'image_path': row[11]?.toString(),
+          'is_active': row[12] ?? true,
+        });
+      }
+
+      return Response(200, body: jsonEncode(stickers), headers: {'Content-Type': 'application/json'});
+    } catch (e) {
+      return Response(500, body: jsonEncode({'error': 'Failed to fetch stickers: $e'}));
+    }
+  });
+
 // 5. THUMBNAIL ROUTE (With Server-Side Auto-Generation)
   router.get('/player/video/thumbnail/<videoId>', (Request req, String videoId) async {
     try {

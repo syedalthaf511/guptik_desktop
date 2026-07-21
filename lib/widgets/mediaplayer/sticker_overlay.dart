@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:media_kit/media_kit.dart';
 import '../../models/mediaplayer/video_sticker_model.dart';
 import '../../services/mediaplayer/player_monetization_service.dart';
+import '../../services/mediaplayer/player_api_service.dart';
 
 /// StickerOverlay — Renders shoppable product stickers on top of the video
 /// (YouTube/IG-style). Stickers appear at their [VideoSticker.timestampInVideo]
@@ -12,11 +13,17 @@ import '../../services/mediaplayer/player_monetization_service.dart';
 class StickerOverlay extends StatefulWidget {
   final Player player;
   final String videoId;
+  /// The creator's gateway/tunnel URL. Stickers are fetched from the CREATOR's
+  /// node (not the viewer's local DB) so a sticker added by user A is visible
+  /// to user B — exactly like comments/likes. Pass null to fall back to the
+  /// viewer's own local node (e.g. when watching your own video).
+  final String? creatorUrl;
 
   const StickerOverlay({
     super.key,
     required this.player,
     required this.videoId,
+    this.creatorUrl,
   });
 
   @override
@@ -39,7 +46,16 @@ class _StickerOverlayState extends State<StickerOverlay> {
   }
 
   Future<void> _loadStickers() async {
-    final stickers = await _service.fetchStickers(widget.videoId);
+    List<VideoSticker> stickers;
+    if (widget.creatorUrl != null && widget.creatorUrl!.isNotEmpty) {
+      // 🚀 Cross-user: fetch from the CREATOR's gateway node so any viewer sees
+      // the stickers (this is what makes A's stickers appear for B).
+      final api = PlayerApiService(gatewayUrl: widget.creatorUrl);
+      stickers = await api.fetchStickers(widget.videoId);
+    } else {
+      // Fallback: viewer is the creator — read from their own local node.
+      stickers = await _service.fetchStickers(widget.videoId);
+    }
     if (mounted) {
       setState(() {
         _stickers = stickers;

@@ -3,6 +3,7 @@ import 'package:http/http.dart' as http;
 import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../models/mediaplayer/player_video_model.dart';
+import '../../models/mediaplayer/video_sticker_model.dart';
 
 class PlayerApiService {
   // The specific Cloudflare Tunnel URL or Localhost IP for the creator's node
@@ -245,6 +246,33 @@ class PlayerApiService {
     } catch (e) {
       debugPrint('Fetch Stats Error: $e');
       return null;
+    }
+  }
+
+  /// 🚀 Fetches the shoppable product stickers for a video directly from the
+  /// CREATOR'S gateway node (not the viewer's local DB). This is what makes a
+  /// sticker added by user A visible to user B — the data lives on A's node
+  /// and is served over A's gateway, exactly like comments/likes.
+  Future<List<VideoSticker>> fetchStickers(String videoId) async {
+    if (gatewayUrl == null) return [];
+    try {
+      final safeUrl = gatewayUrl!.startsWith('http')
+          ? gatewayUrl
+          : 'https://$gatewayUrl';
+      final response = await http.get(
+        Uri.parse('$safeUrl/player/video/stickers/$videoId'),
+        headers: {'Content-Type': 'application/json'},
+      );
+      if (response.statusCode == 200) {
+        final list = jsonDecode(response.body) as List;
+        return list
+            .map((e) => VideoSticker.fromJson(e as Map<String, dynamic>))
+            .toList();
+      }
+      return [];
+    } catch (e) {
+      debugPrint('Fetch Stickers (gateway) Error: $e');
+      return [];
     }
   }
 
