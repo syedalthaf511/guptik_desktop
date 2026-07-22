@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:postgres/postgres.dart';
@@ -6,7 +7,7 @@ import '../../widgets/mediaplayer/player_video_card.dart';
 import '../../services/external/postgres_service.dart';
 
 class DesktopSystemFolderScreen extends StatefulWidget {
-  final String folderType; // 'posted', 'saved', or 'drafts'
+  final String folderType; // 'posted', 'saved', 'drafts', 'repost', or 'stickers'
   final String folderTitle;
   final IconData folderIcon;
   final Color folderColor;
@@ -85,8 +86,6 @@ class _DesktopSystemFolderScreenState extends State<DesktopSystemFolderScreen> {
           ORDER BY d.last_edited_at DESC
         ''');
       } else if (widget.folderType == 'repost') {
-        // 🚀 REPOSTS: show the reposter's local mp_repost_videos, joined to the
-        // original video's metadata so the card has a title/thumbnail/channel.
         result = await connection.execute('''
           SELECT v.id, v.title, v.description, v.file_path, v.view_count_local,
                  v.like_count_local, v.comment_count_local, c.channel_name, v.is_reel, r.reposted_at, c.channel_id
@@ -94,6 +93,13 @@ class _DesktopSystemFolderScreenState extends State<DesktopSystemFolderScreen> {
           JOIN mp_videos v ON r.original_video_id = v.id::text
           JOIN mp_channels c ON v.channel_id = c.channel_id
           ORDER BY r.reposted_at DESC
+        ''');
+      } else if (widget.folderType == 'stickers') {
+        result = await connection.execute('''
+          SELECT id::text, product_name, image_path, price, currency, created_at
+          FROM mp_sticker_products_catalog
+          WHERE is_active = TRUE
+          ORDER BY created_at DESC
         ''');
       }
 
@@ -104,21 +110,38 @@ class _DesktopSystemFolderScreenState extends State<DesktopSystemFolderScreen> {
       
       if (result != null) {
         for (final row in result) {
-          final Map<String, dynamic> jsonMap = {
-            'video_id': row[0].toString(),
-            'title': row[1].toString(),
-            'description': row[2]?.toString() ?? '',
-            'file_path': row[3].toString(),
-            'view_count': row[4] ?? 0,
-            'like_count': row[5] ?? 0,
-            'comment_count': row[6] ?? 0,
-            'channel_name': row[7]?.toString() ?? 'Creator',
-            'is_reel': row[8] as bool? ?? false,
-            'created_at': row[9]?.toString() ?? DateTime.now().toString(),
-            'creator_uid': row[10].toString(),
-          };
-          
-          loadedVideos.add(PlayerVideo.fromJson(jsonMap, safeUrl));
+          // If loading stickers, map fields safely to the PlayerVideo schema
+          if (widget.folderType == 'stickers') {
+            final Map<String, dynamic> stickerJsonMap = {
+              'video_id': row[0].toString(),
+              'title': row[1].toString(),
+              'description': 'Price: ${row[4]} ${row[3]}',
+              'file_path': row[2]?.toString() ?? '',
+              'view_count': 0,
+              'like_count': 0,
+              'comment_count': 0,
+              'channel_name': 'Sticker Asset',
+              'is_reel': false,
+              'created_at': row[5]?.toString() ?? DateTime.now().toString(),
+              'creator_uid': 'local_sticker',
+            };
+            loadedVideos.add(PlayerVideo.fromJson(stickerJsonMap, safeUrl));
+          } else {
+            final Map<String, dynamic> jsonMap = {
+              'video_id': row[0].toString(),
+              'title': row[1].toString(),
+              'description': row[2]?.toString() ?? '',
+              'file_path': row[3].toString(),
+              'view_count': row[4] ?? 0,
+              'like_count': row[5] ?? 0,
+              'comment_count': row[6] ?? 0,
+              'channel_name': row[7]?.toString() ?? 'Creator',
+              'is_reel': row[8] as bool? ?? false,
+              'created_at': row[9]?.toString() ?? DateTime.now().toString(),
+              'creator_uid': row[10].toString(),
+            };
+            loadedVideos.add(PlayerVideo.fromJson(jsonMap, safeUrl));
+          }
         }
       }
 

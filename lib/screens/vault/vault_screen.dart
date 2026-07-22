@@ -319,7 +319,11 @@ class _VaultScreenState extends State<VaultScreen> {
       type = 'repost';
       icon = LucideIcons.repeat;
       color = Colors.lightGreenAccent;
-    } else if (folderName == "Vault Folder") {
+    } else if (folderName == "Sticker Products") { // 🚀 NEW FOLDER TYPE
+      type = 'stickers';
+      icon = LucideIcons.shoppingBag;
+      color = Colors.pinkAccent;
+    }else if (folderName == "Vault Folder") {
       type = 'vault_sys';
       icon = LucideIcons.shield;
       color = Colors.orangeAccent;
@@ -408,13 +412,16 @@ class _VaultScreenState extends State<VaultScreen> {
                       if (index == 3) {
                         return _buildVirtualFolderCard("Repost Videos", LucideIcons.repeat, Colors.lightGreenAccent);
                       }
-                      // 5. Render the "Vault Folder" Folder
+                      // 5. Render the "Sticker Products" Folder
                       if (index == 4) {
+                        return _buildVirtualFolderCard("Sticker Products", LucideIcons.shoppingBag, Colors.pinkAccent);
+                      }
+                      // 6. Render the "Vault Folder" Folder
+                      if (index == 5) {
                         return _buildVirtualFolderCard("Vault Folder", LucideIcons.shield, Colors.orangeAccent);
                       }
-
-                      // 6. Render the actual physical files
-                      return _buildFileCard(_files[index - 5]);
+                      // 7. Render the actual physical files (adjust index offset to +6)
+                     return _buildFileCard(_files[index - 6]);
                     },
                   ),
                 ],
@@ -422,6 +429,7 @@ class _VaultScreenState extends State<VaultScreen> {
             ),
     );
   }
+  
 
   // 🚀 WIDGET: A square folder that perfectly matches the File Card dimensions
   Widget _buildVirtualFolderCard(String title, IconData icon, Color color) {

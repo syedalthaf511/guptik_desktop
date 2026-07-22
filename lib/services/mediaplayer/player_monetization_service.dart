@@ -1,8 +1,11 @@
+import 'dart:io';
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:postgres/postgres.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../models/mediaplayer/video_sticker_model.dart';
+import '../../services/external/docker_service.dart';
 
 /// PlayerMonetizationService — In-video sticker product placement editor,
 /// earnings dashboard, ad integration, and subscription/membership tracking.
@@ -31,52 +34,17 @@ class PlayerMonetizationService {
   // =========================================================================
 
   /// Fetches all product/service stickers for a given video.
-  ///
-  /// Stickers are stored in a SHARED Supabase Storage location so that ANY
-  /// viewer (not just the creator) can see them — this is what makes a
-  /// sticker added by user A appear for user B. We fall back to the creator's
-  /// local Postgres node only if the shared store is unavailable.
+  /// Reads directly from the local Postgres node (fully decentralized).
   Future<List<VideoSticker>> fetchStickers(String videoId) async {
-    // 1) Preferred: shared store (visible to every viewer).
-    final shared = await fetchStickersShared(videoId);
-    if (shared.isNotEmpty) return shared;
-
-    // 2) Fallback: local Postgres (creator-only visibility).
     return _fetchStickersLocal(videoId);
   }
 
-  /// Reads sticker metadata from the shared Supabase Storage JSON blob
-  /// (`post_images/sticker_data/<videoId>.json`). Works cross-user because
-  /// the bucket is public.
-  Future<List<VideoSticker>> fetchStickersShared(String videoId) async {
-    try {
-      final supabase = Supabase.instance.client;
-      final path = 'sticker_data/$videoId.json';
-      final bytes = await supabase.storage.from('post_images').download(path);
-      if (bytes == null || bytes.isEmpty) return [];
-      final jsonStr = utf8.decode(bytes);
-      final list = jsonDecode(jsonStr) as List;
-      final stickers = list
-          .map((e) => VideoSticker.fromJson(e as Map<String, dynamic>))
-          .toList();
-      stickers.sort((a, b) =>
-          a.timestampInVideo.compareTo(b.timestampInVideo));
-      return stickers;
-    } catch (e) {
-      debugPrint('Fetch Shared Stickers Error: $e');
-      return [];
-    }
-  }
-
-  /// Local-only fallback (creator's own node). Kept for offline/legacy support.
+  /// Local-only fetch (creator's own node).
   Future<List<VideoSticker>> _fetchStickersLocal(String videoId) async {
     try {
       final conn = await _connect();
 
-      // Ensure the catalog supports the new shoppable columns before we
-      // SELECT them. Without this, a video with stickers but a table that
-      // lacks `mrp`/`duration_on_screen` throws 42703 and returns no
-      // stickers (so nothing shows in the player).
+      // Ensure the catalog supports the new shoppable columns before we SELECT them.
       await conn.execute('''
         ALTER TABLE mp_sticker_products_catalog
           ADD COLUMN IF NOT EXISTS mrp DECIMAL DEFAULT 0,
@@ -159,10 +127,7 @@ class PlayerMonetizationService {
         }));
       }
 
-      // Sort by timestamp in video
-      stickers.sort((a, b) =>
-          a.timestampInVideo.compareTo(b.timestampInVideo));
-
+      stickers.sort((a, b) => a.timestampInVideo.compareTo(b.timestampInVideo));
       return stickers;
     } catch (e) {
       debugPrint('Fetch Stickers (local) Error: $e');
@@ -186,7 +151,6 @@ class PlayerMonetizationService {
   }) async {
     try {
       final conn = await _connect();
-      // Ensure the catalog supports the new shoppable columns.
       await conn.execute('''
         ALTER TABLE mp_sticker_products_catalog
           ADD COLUMN IF NOT EXISTS mrp DECIMAL DEFAULT 0,
@@ -206,9 +170,7 @@ class PlayerMonetizationService {
           'vid': videoId,
           'ts': timestampInVideo,
           'dur': durationOnScreen,
-          'zone': clickableZone != null
-              ? jsonEncode(clickableZone.toJson())
-              : null,
+          'zone': clickableZone != null ? jsonEncode(clickableZone.toJson()) : null,
           'name': productName,
           'price': price,
           'mrp': mrp,
@@ -229,13 +191,9 @@ class PlayerMonetizationService {
     }
   }
 
-  /// Adds a product sticker and makes it visible to EVERY viewer (not just the
-  /// creator) by storing it in the shared Supabase Storage location. The image
-  /// bytes are uploaded to the public `post_images` bucket and the metadata is
-  /// written to `sticker_data/<videoId>.json`. We also mirror to the creator's
-  /// local Postgres node so existing analytics/dashboards keep working.
-  ///
-  /// [imageBytes] are the (optionally bg-removed) PNG bytes of the sticker.
+  /// 🚀 DECENTRALIZED STICKER STORAGE: Saves the sticker product image directly 
+  /// into the local Vault (`vault_files/`) instead of using Supabase buckets. 
+  /// Generates a valid Gateway URL so it streams over the Cloudflare tunnel.
   Future<String?> addProductStickerShared({
     required String videoId,
     required String productName,
@@ -249,35 +207,39 @@ class PlayerMonetizationService {
     double mrp = 0,
     double durationOnScreen = 8,
   }) async {
-    final stickerId = DateTime.now().millisecondsSinceEpoch.toString();
+    String? imageUrl;
 
-    // 1) Upload image to shared storage (public URL any viewer can load).
-    String? imageUrl = await _uploadStickerImage(videoId, imageBytes);
+    // 1) Save the image to the local Vault folder if bytes are provided
+    if (imageBytes != null && imageBytes.isNotEmpty) {
+      const secureStorage = FlutterSecureStorage();
+      final vaultPath = await secureStorage.read(key: 'vault_path');
+      final rawPublicUrl = await secureStorage.read(key: 'public_url') ?? '';
+      
+      if (vaultPath != null && rawPublicUrl.isNotEmpty) {
+        final publicUrl = DockerService.sanitizeTunnelUrl(rawPublicUrl);
+        final safeUrl = publicUrl.startsWith('http') ? publicUrl : 'https://$publicUrl';
+        
+        final stickerFileName = 'sticker_${DateTime.now().millisecondsSinceEpoch}.png';
+        
+        // Target the local vault_files directory
+        final localVaultDir = Directory('$vaultPath${Platform.pathSeparator}vault_files');
+        if (!await localVaultDir.exists()) {
+          await localVaultDir.create(recursive: true);
+        }
+        
+        // Write file to disk
+        final file = File('${localVaultDir.path}${Platform.pathSeparator}$stickerFileName');
+        await file.writeAsBytes(imageBytes);
 
-    // 2) Build the sticker record.
-    final sticker = VideoSticker(
-      id: stickerId,
-      videoId: videoId,
-      productId: stickerId,
-      title: productName,
-      timestampInVideo: timestampInVideo,
-      durationOnScreen: durationOnScreen,
-      salePrice: price ?? 0,
-      mrp: mrp,
-      currency: currency,
-      description: description,
-      linkUrl: linkUrl,
-      imagePath: imageUrl, // now a public URL, not a local path
-      clickableZone: clickableZone,
-      isActive: true,
-      stickerType: 'product',
-    );
+        // 2) Construct Gateway URL using your router.get('/internal/media/<filename>') route
+        imageUrl = '$safeUrl/internal/media/$stickerFileName';
+        
+        debugPrint('✅ Sticker image saved locally to Vault: $stickerFileName');
+      }
+    }
 
-    // 3) Persist to the shared JSON blob (append to existing list).
-    await _appendSharedSticker(videoId, sticker);
-
-    // 4) Mirror to local Postgres for creator-side analytics (best effort).
-    await addProductSticker(
+    // 3) Save the catalog entry to local Postgres
+    return await addProductSticker(
       videoId: videoId,
       productName: productName,
       timestampInVideo: timestampInVideo,
@@ -285,65 +247,11 @@ class PlayerMonetizationService {
       currency: currency,
       description: description,
       linkUrl: linkUrl,
-      imagePath: imageUrl,
+      imagePath: imageUrl, 
       clickableZone: clickableZone,
       mrp: mrp,
       durationOnScreen: durationOnScreen,
     );
-
-    return stickerId;
-  }
-
-  /// Uploads sticker image bytes to the public `post_images` bucket and
-  /// returns the public URL. Returns null if upload fails.
-  Future<String?> _uploadStickerImage(String videoId, Uint8List? bytes) async {
-    if (bytes == null || bytes.isEmpty) return null;
-    try {
-      final supabase = Supabase.instance.client;
-      final fileName =
-          'sticker_data/$videoId/${DateTime.now().millisecondsSinceEpoch}.png';
-      await supabase.storage.from('post_images').uploadBinary(
-            fileName,
-            bytes,
-            fileOptions: const FileOptions(
-                upsert: true, contentType: 'image/png'),
-          );
-      return supabase.storage.from('post_images').getPublicUrl(fileName);
-    } catch (e) {
-      debugPrint('Sticker image upload error: $e');
-      return null;
-    }
-  }
-
-  /// Appends a sticker to the shared `sticker_data/<videoId>.json` blob,
-  /// creating it if it doesn't exist.
-  Future<void> _appendSharedSticker(String videoId, VideoSticker sticker) async {
-    try {
-      final supabase = Supabase.instance.client;
-      final path = 'sticker_data/$videoId.json';
-
-      // Read existing list (if any).
-      List<dynamic> list = [];
-      try {
-        final existing = await supabase.storage.from('post_images').download(path);
-        if (existing != null && existing.isNotEmpty) {
-          list = jsonDecode(utf8.decode(existing)) as List;
-        }
-      } catch (_) {
-        // No existing blob yet — start fresh.
-      }
-
-      list.add(sticker.toJson());
-      final encoded = utf8.encode(jsonEncode(list));
-      await supabase.storage.from('post_images').uploadBinary(
-            path,
-            encoded,
-            fileOptions: const FileOptions(
-                upsert: true, contentType: 'application/json'),
-          );
-    } catch (e) {
-      debugPrint('Append shared sticker error: $e');
-    }
   }
 
   /// Adds a service sticker (e.g. booking/consultation) to a video.
@@ -370,9 +278,7 @@ class PlayerMonetizationService {
         parameters: {
           'vid': videoId,
           'ts': timestampInVideo,
-          'zone': clickableZone != null
-              ? jsonEncode(clickableZone.toJson())
-              : null,
+          'zone': clickableZone != null ? jsonEncode(clickableZone.toJson()) : null,
           'name': serviceName,
           'price': price,
           'cur': currency,
@@ -456,13 +362,10 @@ class PlayerMonetizationService {
   // EARNINGS DASHBOARD
   // =========================================================================
 
-  /// Fetches monetization summary for a channel — total earnings, sales,
-  /// clicks, and per-video breakdown.
   Future<Map<String, dynamic>> fetchChannelEarnings(String channelId) async {
     try {
       final conn = await _connect();
 
-      // Aggregate product stats
       final productResult = await conn.execute(
         Sql.named('''
           SELECT
@@ -478,7 +381,6 @@ class PlayerMonetizationService {
         parameters: {'cid': channelId},
       );
 
-      // Channel-level earnings
       final channelResult = await conn.execute(
         Sql.named('''
           SELECT total_earnings_local, monetization_enabled
@@ -518,9 +420,7 @@ class PlayerMonetizationService {
         'gross_revenue': grossRevenue,
         'channel_earnings': channelEarnings,
         'monetization_enabled': monetizationEnabled,
-        'conversion_rate': totalClicks > 0
-            ? (totalCompleted / totalClicks) * 100
-            : 0.0,
+        'conversion_rate': totalClicks > 0 ? (totalCompleted / totalClicks) * 100 : 0.0,
       };
     } catch (e) {
       debugPrint('Fetch Channel Earnings Error: $e');
@@ -540,13 +440,10 @@ class PlayerMonetizationService {
   // AD INTEGRATION POINTS
   // =========================================================================
 
-  /// Fetches ad integration config for a channel. Returns default config
-  /// if the channel hasn't customized ad settings.
   Future<Map<String, dynamic>> fetchAdSettings(String channelId) async {
     try {
       final conn = await _connect();
 
-      // Ensure ad settings table exists
       await conn.execute('''
         CREATE TABLE IF NOT EXISTS mp_channel_ad_settings (
           channel_id TEXT PRIMARY KEY,
@@ -584,7 +481,6 @@ class PlayerMonetizationService {
         };
       }
 
-      // Defaults
       return {
         'pre_roll_enabled': false,
         'mid_roll_enabled': false,
@@ -606,7 +502,6 @@ class PlayerMonetizationService {
     }
   }
 
-  /// Updates ad integration settings for a channel.
   Future<bool> updateAdSettings({
     required String channelId,
     required bool preRollEnabled,
@@ -650,7 +545,6 @@ class PlayerMonetizationService {
   // SUBSCRIPTION / MEMBERSHIP
   // =========================================================================
 
-  /// Creates a membership tier for a channel (e.g. $4.99/month supporter).
   Future<String?> createMembershipTier({
     required String channelId,
     required String tierName,
@@ -704,9 +598,7 @@ class PlayerMonetizationService {
     }
   }
 
-  /// Fetches all membership tiers for a channel.
-  Future<List<Map<String, dynamic>>> fetchMembershipTiers(
-      String channelId) async {
+  Future<List<Map<String, dynamic>>> fetchMembershipTiers(String channelId) async {
     try {
       final conn = await _connect();
       await conn.execute('''
@@ -758,76 +650,10 @@ class PlayerMonetizationService {
   }
 
   // =========================================================================
-  // REVENUE ANALYTICS
-  // =========================================================================
-
-  /// Fetches revenue analytics for a channel across a date range.
-  Future<Map<String, dynamic>> fetchRevenueAnalytics(
-      String channelId, DateTime startDate, DateTime endDate) async {
-    try {
-      final earningsSummary = await fetchChannelEarnings(channelId);
-
-      // Also fetch per-video sticker breakdown
-      final conn = await _connect();
-      final videoResult = await conn.execute(
-        Sql.named('''
-          SELECT uv.id, uv.title,
-                 COUNT(spc.id) as sticker_count,
-                 COALESCE(SUM(spc.click_count_local), 0) as clicks,
-                 COALESCE(SUM(spc.purchase_completed_count), 0) as purchases,
-                 COALESCE(SUM(spc.price * spc.purchase_completed_count), 0) as revenue
-          FROM mp_videos uv
-          LEFT JOIN mp_sticker_products_catalog spc ON spc.video_id = uv.id
-          WHERE uv.channel_id = @cid AND uv.is_deleted = FALSE
-          GROUP BY uv.id, uv.title
-          ORDER BY revenue DESC
-          LIMIT 10
-        '''),
-        parameters: {'cid': channelId},
-      );
-      await conn.close();
-
-      final List<Map<String, dynamic>> topVideos = [];
-      for (final row in videoResult) {
-        topVideos.add({
-          'video_id': row[0]?.toString() ?? '',
-          'title': row[1]?.toString() ?? '',
-          'sticker_count': _toInt(row[2]),
-          'clicks': _toInt(row[3]),
-          'purchases': _toInt(row[4]),
-          'revenue': _toDouble(row[5]),
-        });
-      }
-
-      return {
-        ...earningsSummary,
-        'top_videos': topVideos,
-        'date_range_start': startDate.toIso8601String(),
-        'date_range_end': endDate.toIso8601String(),
-      };
-    } catch (e) {
-      debugPrint('Fetch Revenue Analytics Error: $e');
-      return {
-        'total_stickers': 0,
-        'total_clicks': 0,
-        'total_purchases': 0,
-        'gross_revenue': 0.0,
-        'channel_earnings': 0.0,
-        'monetization_enabled': false,
-        'conversion_rate': 0.0,
-        'top_videos': <Map<String, dynamic>>[],
-      };
-    }
-  }
-
-  // =========================================================================
   // SUPABASE SYNC
   // =========================================================================
 
-  /// Syncs the local monetization status to the global Supabase feed so
-  /// the network knows the channel has monetization enabled.
-  Future<void> syncMonetizationToSupabase(
-      String channelId, bool enabled) async {
+  Future<void> syncMonetizationToSupabase(String channelId, bool enabled) async {
     try {
       await Supabase.instance.client
           .from('mp_channels')
@@ -854,9 +680,6 @@ class PlayerMonetizationService {
     return value;
   }
 
-  /// Safely converts a Postgres numeric/int column to int. The `postgres`
-  /// package returns DECIMAL/numeric columns as Strings, so a direct
-  /// `(value as num)` cast would throw. Handles int, num, and String.
   int _toInt(dynamic v) {
     if (v == null) return 0;
     if (v is int) return v;
@@ -864,8 +687,6 @@ class PlayerMonetizationService {
     return int.tryParse(v.toString()) ?? 0;
   }
 
-  /// Safely converts a Postgres numeric/int column to double. Same rationale
-  /// as [_toInt] — numeric columns arrive as Strings from the driver.
   double _toDouble(dynamic v) {
     if (v == null) return 0.0;
     if (v is num) return v.toDouble();

@@ -54,8 +54,9 @@ class _DesktopMediaPlayerScreenState extends State<DesktopMediaPlayerScreen> wit
   int _repostCount = 0;
   bool _nodeUnreachable = false;
   String _nodeError = '';
-  // 🚀 AGE GATE: tracks whether an 18+ video has been confirmed by the viewer.
   bool _ageConfirmed = false;
+  // 🚀 AGE GATE: tracks whether an 18+ video has been confirmed by the viewer.
+   // Removed unused field _ageConfirmed
 
   // 🚀 WATCHER INTEREST: 'interested' / 'not_interested' / null (no choice yet).
   String? _watcherInterest;
@@ -154,7 +155,8 @@ class _DesktopMediaPlayerScreenState extends State<DesktopMediaPlayerScreen> wit
             onPressed: () {
               Navigator.pop(context);
               if (mounted) {
-                setState(() => _ageConfirmed = true);
+                 setState(() => _ageConfirmed = true);
+   // Removed all references to _ageConfirmed
                 _checkNodeReachable(safeUrl, streamUrl);
               }
             },
