@@ -51,6 +51,16 @@ class PostgresService {
       );
       _isConnected = true;
       print("✅ Database Connected!");
+
+    // 🚀 THE MAGIC FIX: This runs as the superuser, so it will NEVER throw a permission error!
+      try {
+        await _connection!.execute('ALTER TABLE mp_commented_videos ADD COLUMN IF NOT EXISTS viewer_name TEXT DEFAULT \'Creator\';');
+        await _connection!.execute('ALTER TABLE mp_commented_videos ADD COLUMN IF NOT EXISTS parent_comment_id TEXT;');
+        print("✅ DB Check: mp_commented_videos migration columns are ready.");
+      } catch (e) {
+        print("Migration warning: $e");
+      }
+
       // 🚀 THE MIGRATION FIX: Check and add the column every time we connect!
       try {
         await _connection!.execute('ALTER TABLE tm_contacts ADD COLUMN IF NOT EXISTS custom_username TEXT;');
@@ -218,6 +228,8 @@ class PostgresService {
         ''');
         print("✅ DB Check: mp_draft_videos table is ready.");
       } catch (_) {}
+
+     
 
     } catch (e) {
       print("DB Re-connect Error: $e");
@@ -1070,14 +1082,15 @@ class PostgresService {
         )
       ''');
 
-    await conn.execute('''
+  await conn.execute('''
       CREATE TABLE IF NOT EXISTS mp_commented_videos (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         video_id TEXT NOT NULL,
         creator_uid TEXT,
         comment_text TEXT NOT NULL,
         comment_timestamp TIMESTAMPTZ DEFAULT NOW(),
-        parent_comment_id UUID,
+        parent_comment_id TEXT,
+        viewer_name TEXT DEFAULT 'Creator',
         likes_on_comment_local INTEGER DEFAULT 0,
         reaction_heart INTEGER DEFAULT 0,
         reaction_laugh INTEGER DEFAULT 0,
@@ -1095,7 +1108,8 @@ class PostgresService {
         creator_uid TEXT,
         saved_timestamp TIMESTAMPTZ DEFAULT NOW(),
         folder_name TEXT DEFAULT 'Default',
-        is_incognito BOOLEAN DEFAULT FALSE
+        is_incognito BOOLEAN DEFAULT FALSE,
+        UNIQUE(video_id, creator_uid) -- 🚀 Prevents duplicate saves!
       )
     ''');
 

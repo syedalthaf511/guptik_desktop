@@ -27,6 +27,7 @@ class PlayerApiService {
       // show "reposted from @originalChannelName" while attributing the card
       // to the reposter (creator_uid of this row). PostgREST names the FK
       // relationship automatically from the `repost_id` column.
+      // 🚀 Expands the parent row via foreign key `repost_id`
       final response = await supabase
           .from('mp_videos')
           .select('*, original:mp_videos!repost_id(*)')

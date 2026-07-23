@@ -55,8 +55,6 @@ class _DesktopMediaPlayerScreenState extends State<DesktopMediaPlayerScreen> wit
   bool _nodeUnreachable = false;
   String _nodeError = '';
   bool _ageConfirmed = false;
-  // 🚀 AGE GATE: tracks whether an 18+ video has been confirmed by the viewer.
-   // Removed unused field _ageConfirmed
 
   // 🚀 WATCHER INTEREST: 'interested' / 'not_interested' / null (no choice yet).
   String? _watcherInterest;
@@ -116,6 +114,26 @@ class _DesktopMediaPlayerScreenState extends State<DesktopMediaPlayerScreen> wit
       // so the user sees a clear error instead of a silent black screen.
       _checkNodeReachable(safeUrl, streamUrl);
     }
+
+    // 🚀 Vault Check: Verify if this video is already saved on local Postgres upon loading
+    _checkIfSaved();
+  }
+
+  // 🚀 Check local Postgres to see if this video is already saved
+  Future<void> _checkIfSaved() async {
+    final currentUser = Supabase.instance.client.auth.currentUser;
+    if (currentUser == null) return;
+    
+    try {
+      final isAlreadySaved = await PlayerOrganizationService().isInWatchLater(widget.video.videoId);
+      if (mounted) {
+        setState(() {
+          _isSaved = isAlreadySaved;
+        });
+      }
+    } catch (e) {
+      debugPrint('Check saved status error: $e');
+    }
   }
 
   // 🚀 AGE GATE DIALOG: mirrors YouTube's mature-content confirmation.
@@ -155,8 +173,7 @@ class _DesktopMediaPlayerScreenState extends State<DesktopMediaPlayerScreen> wit
             onPressed: () {
               Navigator.pop(context);
               if (mounted) {
-                 setState(() => _ageConfirmed = true);
-   // Removed all references to _ageConfirmed
+                setState(() => _ageConfirmed = true);
                 _checkNodeReachable(safeUrl, streamUrl);
               }
             },
@@ -298,6 +315,7 @@ class _DesktopMediaPlayerScreenState extends State<DesktopMediaPlayerScreen> wit
   }
 
   Future<void> _handleSave() async {
+    if (_isSaved) return; // Prevent double saving
     final success = await _apiService.saveVideo(widget.video.videoId, widget.video.creatorUid);
     if (success && mounted) {
       setState(() => _isSaved = true); 
@@ -320,7 +338,6 @@ class _DesktopMediaPlayerScreenState extends State<DesktopMediaPlayerScreen> wit
       return;
     }
 
-    // Don't let a creator repost their own video as a "repost".
     if (currentUser.id == widget.video.creatorUid) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('This is your own video.'), backgroundColor: Colors.orange),
@@ -335,6 +352,7 @@ class _DesktopMediaPlayerScreenState extends State<DesktopMediaPlayerScreen> wit
       return;
     }
 
+    // 1. Call local Docker gateway repost endpoint
     final success = await _apiService.repostVideo(
       originalVideoId: widget.video.videoId,
       originalCreatorUid: widget.video.creatorUid,
@@ -344,70 +362,64 @@ class _DesktopMediaPlayerScreenState extends State<DesktopMediaPlayerScreen> wit
       reposterChannelName: widget.video.channelName,
     );
 
-      if (success && mounted) {
-        // 🚀 FEED ATTRIBUTION: Insert a NEW row in the admin Supabase
-        // mp_videos table attributed to the REPOSTER (User A), with
-        // repost_id pointing to the original video's row id. This is what
-        // makes the repost show up in the global feed as User A's video,
-        // with the original creator (User B) surfaced via the nested
-        // `original:mp_videos!repost_id(*)` expansion. The stream/thumbnail
-        // URLs still point to the original creator's node so the file plays.
-        try {
-          final supabase = Supabase.instance.client;
-          // Look up the original video's UUID row id from its text video_id.
-          final orig = await supabase
-              .from('mp_videos')
-              .select('id')
-              .eq('video_id', widget.video.videoId)
-              .maybeSingle();
-          final origRowId = orig?['id']?.toString();
-          if (origRowId != null) {
-            final repostVideoId = math.Random(DateTime.now().millisecondsSinceEpoch).toString();
-            await supabase.from('mp_videos').insert({
-              'video_id': repostVideoId,
-              'creator_uid': currentUser.id,
-              'channel_name': widget.video.channelName,
-              'title': widget.video.title,
-              'description': widget.video.description,
-              'creator_cloudflare_url': widget.video.originalCreatorUrl ?? widget.video.creatorUrl,
-              'thumbnail_url': widget.video.thumbnailUrl ?? '',
-              'category': widget.video.category,
-              'visibility': 'public',
-              'is_reel': widget.video.isReel,
-              'is_monetized': false,
-              'made_for_kids': widget.video.madeForKids,
-              'age_rating': widget.video.ageRating,
-              'repost_id': origRowId,
-            });
-          }
-        } catch (e) {
-          debugPrint('Repost feed insert (non-fatal): $e');
+    if (success && mounted) {
+      try {
+        final supabase = Supabase.instance.client;
+        
+        // Find the original master row's UUID id
+        final orig = await supabase
+            .from('mp_videos')
+            .select('id')
+            .eq('video_id', widget.video.videoId)
+            .maybeSingle();
+            
+        final origRowId = orig?['id']?.toString();
+        
+        if (origRowId != null) {
+          final repostVideoId = math.Random(DateTime.now().millisecondsSinceEpoch).toString();
+          
+          // 🚀 GLOBAL FEED SYNC: Insert a row attributed to the REPOSTER (User A), 
+          // pointing `repost_id` to the original row id (User B).
+          await supabase.from('mp_videos').insert({
+            'video_id': repostVideoId,
+            'creator_uid': currentUser.id,
+            'channel_name': widget.video.channelName,
+            'title': widget.video.title,
+            'description': widget.video.description,
+            'creator_cloudflare_url': widget.video.originalCreatorUrl ?? widget.video.creatorUrl,
+            'thumbnail_url': widget.video.thumbnailUrl ?? '',
+            'category': widget.video.category,
+            'visibility': 'public',
+            'is_reel': widget.video.isReel,
+            'is_monetized': false,
+            'made_for_kids': widget.video.madeForKids,
+            'age_rating': widget.video.ageRating,
+            'repost_id': origRowId, // Links back to User B's master record
+          });
         }
+      } catch (e) {
+        debugPrint('Repost global feed insert error (non-fatal): $e');
+      }
 
-        // 🚀 Also record the repost on the user's LOCAL node so it appears in
-        // the "Repost Videos" folder. The gateway call above only writes to the
-        // original video's node (to increment its repost_count_local), so the
-        // reposter's own folder would otherwise stay empty.
-        // 🚀 Also record the repost on the user's LOCAL node so it appears in
-        // the "Repost Videos" folder. The gateway call above only writes to the
-        // original video's node (to increment its repost_count_local), so the
-        // reposter's own folder would otherwise stay empty.
-        await PlayerOrganizationService().saveLocalRepost(
-          originalVideoId: widget.video.videoId,
-          originalCreatorUid: widget.video.creatorUid,
-          originalCreatorName: widget.video.channelName,
-          originalChannelName: widget.video.channelName,
-          reposterUid: currentUser.id,
-          reposterChannelName: widget.video.channelName,
-        );
-        setState(() {
-          _isReposted = true;
-          _repostCount++;
-        });
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Video reposted to your profile!'), backgroundColor: Colors.green),
-        );
-      } else if (mounted) {
+      // 2. Record the repost locally so it appears in the user's local "Repost Videos" folder
+      await PlayerOrganizationService().saveLocalRepost(
+        originalVideoId: widget.video.videoId,
+        originalCreatorUid: widget.video.creatorUid,
+        originalCreatorName: widget.video.channelName,
+        originalChannelName: widget.video.channelName,
+        reposterUid: currentUser.id,
+        reposterChannelName: widget.video.channelName,
+      );
+
+      setState(() {
+        _isReposted = true;
+        _repostCount++;
+      });
+      
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Video reposted to your profile!'), backgroundColor: Colors.green),
+      );
+    } else if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Failed to repost video.'), backgroundColor: Colors.redAccent),
       );
@@ -521,11 +533,17 @@ class _DesktopMediaPlayerScreenState extends State<DesktopMediaPlayerScreen> wit
                                 color: Colors.black),
                             onPressed: () async {
                               if (commentController.text.isNotEmpty) {
+                                final viewerName = currentUser?.userMetadata?['channel_name'] ?? 
+                                                   currentUser?.userMetadata?['username'] ?? 
+                                                   currentUser?.email?.split('@')[0] ?? 
+                                                   'Creator';
+
                                 final success =
                                     await commentService.postComment(
                                   widget.video.videoId,
                                   widget.video.creatorUid,
                                   commentController.text,
+                                  viewerName: viewerName, // 🚀 Passes the actual username correctly!
                                 );
 
                                 if (success) {
@@ -1015,8 +1033,6 @@ class _DesktopMediaPlayerScreenState extends State<DesktopMediaPlayerScreen> wit
                               _buildActionButton(Icons.share, 'Share', onTap: () {
                                 final link = '${widget.video.creatorUrl}/watch/${widget.video.videoId}';
                                 Clipboard.setData(ClipboardData(text: link));
-                                // 🚀 Record the share so mp_shared_videos is populated
-                                // and share_count_local increments on the node.
                                 _apiService.shareVideo(
                                   videoId: widget.video.videoId,
                                   creatorUid: widget.video.creatorUid,
@@ -1036,9 +1052,6 @@ class _DesktopMediaPlayerScreenState extends State<DesktopMediaPlayerScreen> wit
                     const SizedBox(height: 16),
 
                     // 🚀 WATCHER INTEREST: Interested / Not interested / Clear chips.
-                    // Lets a watcher tell the recommendation engine whether this
-                    // video is relevant, persisted to the local mp_watcher_interest
-                    // table.
                     Wrap(
                       spacing: 8,
                       runSpacing: 8,
@@ -1104,7 +1117,7 @@ class _DesktopMediaPlayerScreenState extends State<DesktopMediaPlayerScreen> wit
                     topLeft: Radius.circular(48),
                     bottomLeft: Radius.circular(48),
                   ),
-                  border: Border.all(color:Color(0xFF00E5FF).withAlpha(120), width: 1.5),
+                  border: Border.all(color: const Color(0xFF00E5FF).withAlpha(120), width: 1.5),
                   boxShadow: [
                     BoxShadow(
                       color: Colors.black.withAlpha(90),
@@ -1136,7 +1149,7 @@ class _DesktopMediaPlayerScreenState extends State<DesktopMediaPlayerScreen> wit
                         ),
                       ),
                       
-                      // 🚀 THE FIX: ListWheelScrollView for the 3D curved scroll effect!
+                      // 🚀 ListWheelScrollView for the 3D curved scroll effect
                       Expanded(
                         child: FutureBuilder<List<PlayerVideo>>(
                           future: _apiService.fetchNetworkFeed(), 
@@ -1153,11 +1166,10 @@ class _DesktopMediaPlayerScreenState extends State<DesktopMediaPlayerScreen> wit
                             
                             final suggestedVideos = snapshot.data!;
                             
-                            // Replaced standard ListView with the 3D Wheel Scroll
                             return ListWheelScrollView.useDelegate(
-                              itemExtent: 130, // The fixed height of your recommendation cards
-                              diameterRatio: 2.5, // Adjusts the depth of the arc 
-                              offAxisFraction: -0.15, // Tilts the scroll curve slightly inward to hug the sidebar
+                              itemExtent: 130,
+                              diameterRatio: 2.5,
+                              offAxisFraction: -0.15,
                               physics: const BouncingScrollPhysics(),
                               childDelegate: ListWheelChildBuilderDelegate(
                                 childCount: suggestedVideos.length,
@@ -1182,7 +1194,7 @@ class _DesktopMediaPlayerScreenState extends State<DesktopMediaPlayerScreen> wit
             ),
           ],
         ),
-    ),
+      ),
     );
   }
 }

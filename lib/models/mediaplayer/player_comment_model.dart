@@ -77,6 +77,9 @@ class PlayerComment {
       videoId: json['video_id']?.toString() ?? '',
       creatorUid: json['creator_uid']?.toString() ?? json['user_id']?.toString() ?? '',
       creatorName: json['creator_name']?.toString() ??
+          json['author_name']?.toString() ??
+          json['name']?.toString() ??
+          json['user_name']?.toString() ??
           json['channel_name']?.toString() ??
           json['username']?.toString() ??
           'Anonymous',

@@ -86,6 +86,7 @@ class _DesktopSystemFolderScreenState extends State<DesktopSystemFolderScreen> {
           ORDER BY d.last_edited_at DESC
         ''');
       } else if (widget.folderType == 'repost') {
+        // 🚀 REPOSTS FOLDER: Fetch rows from local mp_repost_videos joined to mp_videos
         result = await connection.execute('''
           SELECT v.id, v.title, v.description, v.file_path, v.view_count_local,
                  v.like_count_local, v.comment_count_local, c.channel_name, v.is_reel, r.reposted_at, c.channel_id
@@ -94,7 +95,7 @@ class _DesktopSystemFolderScreenState extends State<DesktopSystemFolderScreen> {
           JOIN mp_channels c ON v.channel_id = c.channel_id
           ORDER BY r.reposted_at DESC
         ''');
-      } else if (widget.folderType == 'stickers') {
+      }else if (widget.folderType == 'stickers') {
         result = await connection.execute('''
           SELECT id::text, product_name, image_path, price, currency, created_at
           FROM mp_sticker_products_catalog

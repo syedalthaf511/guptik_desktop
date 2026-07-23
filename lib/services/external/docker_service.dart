@@ -1447,7 +1447,7 @@ void main() async {
     }
   });
 
-  // 3. POST COMMENT ROUTE (Corrected to use mp_commented_videos)
+// 3. POST COMMENT ROUTE (Updated to support threaded replies & usernames)
   router.post('/player/video/comment', (Request req) async {
     try {
       final payload = await req.readAsString();
@@ -1457,16 +1457,20 @@ void main() async {
         settings: const ConnectionSettings(sslMode: SslMode.disable),
       );
       
-      // 🚀 1. Actually save the text to your official mp_commented_videos table!
+      // 🚀 1. Save comment/reply text along with parent ID and viewer name
       await connection.execute(
         Sql.named("""
-          INSERT INTO mp_commented_videos (video_id, creator_uid, comment_text) 
-          VALUES (@vid, @uid, @txt)
+          INSERT INTO mp_commented_videos 
+            (video_id, creator_uid, comment_text, parent_comment_id, viewer_name) 
+          VALUES 
+            (@vid, @uid, @txt, @parent, @name)
         """),
         parameters: {
           'vid': data['video_id'], 
           'uid': data['creator_uid'], 
-          'txt': data['comment_text']
+          'txt': data['comment_text'],
+          'parent': data['parent_comment_id'], // Supports User A replying to User B
+          'name': data['viewer_name'] ?? 'Creator', // Prevents "Anonymous" fallback
         }
       );
 
@@ -1483,7 +1487,7 @@ void main() async {
     }
   });
 
-  // 4. GET COMMENTS ROUTE (Corrected to use mp_commented_videos)
+  // 4. GET COMMENTS ROUTE (🚀 FIXED: Automatically bundles nested replies inside parents)
   router.get('/player/video/comments/<videoId>', (Request req, String videoId) async {
     try {
       final connection = await Connection.open(
@@ -1491,10 +1495,10 @@ void main() async {
         settings: const ConnectionSettings(sslMode: SslMode.disable),
       );
 
-      // 🚀 Fetch from your official table, using comment_timestamp
+      // 🚀 1. Fetch ALL comments for this video (Both parents and replies)
       final result = await connection.execute(
         Sql.named("""
-          SELECT comment_text, creator_uid, comment_timestamp 
+          SELECT id, comment_text, creator_uid, comment_timestamp, parent_comment_id, viewer_name 
           FROM mp_commented_videos 
           WHERE video_id = @vid
           ORDER BY comment_timestamp DESC
@@ -1504,22 +1508,95 @@ void main() async {
       
       await connection.close();
 
-      final List<Map<String, dynamic>> commentsList = [];
+      final List<Map<String, dynamic>> allComments = [];
       for (final row in result) {
-        commentsList.add({
-          'comment_text': row[0].toString(),
-          'creator_uid': row[1].toString(),
-          'created_at': row[2].toString(), // Mapped so the UI still understands it
+        allComments.add({
+          'comment_id': row[0]?.toString() ?? '',
+          'comment_text': row[1]?.toString() ?? '',
+          'creator_uid': row[2]?.toString() ?? '',
+          'created_at': row[3]?.toString() ?? '',
+          'parent_comment_id': row[4]?.toString(),
+          'creator_name': row[5]?.toString() ?? 'Creator',
+          'replies': [], // 🚀 Initialize empty replies list for every comment
         });
       }
 
-      return Response(200, body: jsonEncode(commentsList), headers: {'Content-Type': 'application/json'});
+      // 🚀 2. Sort them into Top-Level Parents and Nested Replies
+      final List<Map<String, dynamic>> topLevelComments = [];
+      final Map<String, List<Map<String, dynamic>>> replyMap = {};
+
+      for (var comment in allComments) {
+        final parentId = comment['parent_comment_id'];
+        
+        // If it has no parent, it's a main comment on the video
+        if (parentId == null || parentId == 'null' || parentId.isEmpty) {
+          topLevelComments.add(comment);
+        } else {
+          // If it has a parent, group it in the reply map
+          if (!replyMap.containsKey(parentId)) {
+            replyMap[parentId] = [];
+          }
+          replyMap[parentId]!.add(comment);
+        }
+      }
+
+      // 🚀 3. Attach the replies directly into the JSON of their parent comment!
+      for (var parent in topLevelComments) {
+        final pid = parent['comment_id'];
+        if (replyMap.containsKey(pid)) {
+          final replies = replyMap[pid]!;
+          // Sort replies so the oldest reply shows up first in the thread (like YouTube)
+          replies.sort((a, b) => (a['created_at'] as String).compareTo(b['created_at'] as String));
+          parent['replies'] = replies;
+        }
+      }
+
+      // Return the clean, nested tree back to Flutter!
+      return Response(200, body: jsonEncode(topLevelComments), headers: {'Content-Type': 'application/json'});
     } catch (e) {
-      return Response(500, body: jsonEncode({'error': 'Failed to fetch comments'}));
+      return Response(500, body: jsonEncode({'error': 'Failed to fetch comments: $e'}));
     }
   });
 
-  // 4b. GET STICKERS ROUTE — returns the shoppable product stickers attached to
+  // 4b. GET REPLIES ROUTE (Kept intact so dynamic Flutter fetching still works)
+  router.get('/player/video/comments/<videoId>/replies/<parentId>', (Request req, String videoId, String parentId) async {
+    try {
+      final connection = await Connection.open(
+        Endpoint(host: 'db', port: 5432, database: 'postgres', username: 'postgres', password: 'GuptikSystemPassword2026'),
+        settings: const ConnectionSettings(sslMode: SslMode.disable),
+      );
+
+      final result = await connection.execute(
+        Sql.named("""
+          SELECT id, comment_text, creator_uid, comment_timestamp, parent_comment_id, viewer_name 
+          FROM mp_commented_videos 
+          WHERE video_id = @vid AND parent_comment_id = @pid
+          ORDER BY comment_timestamp ASC
+        """),
+        parameters: {'vid': videoId, 'pid': parentId},
+      );
+      
+      await connection.close();
+
+      final List<Map<String, dynamic>> repliesList = [];
+      for (final row in result) {
+        repliesList.add({
+          'comment_id': row[0]?.toString() ?? '',
+          'comment_text': row[1]?.toString() ?? '',
+          'creator_uid': row[2]?.toString() ?? '',
+          'created_at': row[3]?.toString() ?? '',
+          'parent_comment_id': row[4]?.toString(),
+          'creator_name': row[5]?.toString() ?? 'Creator',
+        });
+      }
+
+      return Response(200, body: jsonEncode(repliesList), headers: {'Content-Type': 'application/json'});
+    } catch (e) {
+      return Response(500, body: jsonEncode({'error': 'Failed to fetch replies: $e'}));
+    }
+  });
+
+  // 4c. GET STICKERS ROUTE — returns the shoppable product stickers attached to
   // a video so ANY viewer (not just the creator) can see them. Reads from the
   // creator's local mp_sticker_products_catalog and returns the image as the
   // stored public URL (already uploaded to shared storage by the editor).
@@ -1828,18 +1905,35 @@ void main() async {
         settings: const ConnectionSettings(sslMode: SslMode.disable),
       );
       
+      final String vid = data['video_id'].toString();
+      final String uid = data['creator_uid']?.toString() ?? '';
+      final String folderName = data['folder_name'] ?? 'Default';
+
+      // 1. Check if already saved by this user
+      final existing = await connection.execute(
+        Sql.named("SELECT id FROM mp_saved_videos WHERE video_id = @vid AND creator_uid = @uid LIMIT 1"),
+        parameters: {'vid': vid, 'uid': uid}
+      );
+
+      if (existing.isNotEmpty) {
+        await connection.close();
+        return Response(200, body: jsonEncode({'status': 'already_saved'}));
+      }
+
+      // 2. Insert safely if it doesn't exist yet
       await connection.execute(
         Sql.named("INSERT INTO mp_saved_videos (video_id, creator_uid, folder_name) VALUES (@vid, @uid, @folder)"),
         parameters: {
-          'vid': data['video_id'], 
-          'uid': data['creator_uid'],
-          'folder': data['folder_name'] ?? 'Default'
+          'vid': vid, 
+          'uid': uid,
+          'folder': folderName,
         }
       );
       
+      // 3. Increment save count only on a fresh save
       await connection.execute(
         Sql.named("UPDATE mp_videos SET save_count_local = save_count_local + 1 WHERE id = CAST(@vid AS UUID)"),
-        parameters: {'vid': data['video_id']}
+        parameters: {'vid': vid}
       );
       
       await connection.close();

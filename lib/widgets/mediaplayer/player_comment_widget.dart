@@ -144,11 +144,18 @@ class _PlayerCommentWidgetState extends State<PlayerCommentWidget> {
     final currentUser = Supabase.instance.client.auth.currentUser;
     if (currentUser == null) return;
 
+    final viewerName = currentUser.userMetadata?['channel_name'] ?? 
+                       currentUser.userMetadata?['username'] ?? 
+                       currentUser.email?.split('@')[0] ?? 
+                       'Creator';
+
+    // 🚀 FIXED: explicitly passes parentCommentId so nested replies bind to User B's comment ID
     final success = await widget.commentService.postComment(
       widget.videoId,
       widget.videoCreatorUid,
       _replyController.text.trim(),
       parentCommentId: _comment.commentId,
+      viewerName: viewerName, // 🚀 Passes the actual username for the reply!
     );
 
     if (success && mounted) {
@@ -381,7 +388,7 @@ class _PlayerCommentWidgetState extends State<PlayerCommentWidget> {
                         Text(
                           _comment.isIncognito
                               ? 'Anonymous'
-                              : _comment.creatorName,
+                              : (_comment.creatorName.isEmpty ? 'Creator' : _comment.creatorName),
                           style: const TextStyle(
                             color: Colors.white,
                             fontSize: 13,
@@ -574,29 +581,25 @@ class _PlayerCommentWidgetState extends State<PlayerCommentWidget> {
                       ),
                       if (_showReactionPicker) _buildReactionPicker(),
                       const SizedBox(height: 4),
-                      // Reply / View replies toggle
-                      if (hasReplies)
-                        GestureDetector(
-                          onTap: () => setState(
-                              () => _showReplies = !_showReplies),
-                          child: Text(
-                            _showReplies
-                                ? 'Hide ${_comment.replies.length} replies'
-                                : 'View ${_comment.replies.length} replies',
-                            style: const TextStyle(
-                                color: Color(0xFF00E5FF),
-                                fontSize: 12,
-                                fontWeight: FontWeight.bold),
+                      // 🚀 FIXED: Reply / View replies toggle (Always shows Reply)
+                      Row(
+                        children: [
+                          GestureDetector(
+                            onTap: () => setState(() => _showReplyInput = !_showReplyInput),
+                            child: Text('Reply', style: TextStyle(color: Colors.grey.shade400, fontSize: 12, fontWeight: FontWeight.bold)),
                           ),
-                        )
-                      else
-                        GestureDetector(
-                          onTap: () => setState(
-                              () => _showReplyInput = !_showReplyInput),
-                          child: Text('Reply',
-                              style: TextStyle(
-                                  color: Colors.grey.shade400, fontSize: 12)),
-                        ),
+                          if (hasReplies) ...[
+                            const SizedBox(width: 16),
+                            GestureDetector(
+                              onTap: () => setState(() => _showReplies = !_showReplies),
+                              child: Text(
+                                _showReplies ? 'Hide ${_comment.replies.length} replies' : 'View ${_comment.replies.length} replies',
+                                style: const TextStyle(color: Color(0xFF00E5FF), fontSize: 12, fontWeight: FontWeight.bold),
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
                       // Reply input
                       if (_showReplyInput)
                         Padding(
