@@ -393,7 +393,7 @@ class _VaultScreenState extends State<VaultScreen> {
                       crossAxisSpacing: 16,
                       mainAxisSpacing: 16,
                     ),
-                    itemCount: _files.length + 5,
+                    itemCount: _files.length + 6,
                     itemBuilder: (context, index) {
                       
                       // 1. Render the "Posted Videos" Folder

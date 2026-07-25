@@ -1660,8 +1660,9 @@ void main() async {
         settings: const ConnectionSettings(sslMode: SslMode.disable),
       );
       
+      // 🚀 FIXED: Uses id::text to prevent UUID crashes
       final result = await connection.execute(
-        Sql.named("SELECT file_path FROM mp_videos WHERE id = CAST(@vid AS UUID) LIMIT 1"),
+        Sql.named("SELECT file_path FROM mp_videos WHERE id::text = @vid LIMIT 1"),
         parameters: {'vid': videoId},
       );
       await connection.close();
@@ -1687,7 +1688,7 @@ void main() async {
         return Response(404, body: 'Original media file not found on disk. Cannot generate thumbnail.');
       }
 
-      // 2. Define where the JPG should be based on the actual file found (handles .MOV, .MP4, etc.)
+      // 2. Define where the JPG should be based on the actual file found
       final thumbDir = mp4File.parent.path;
       final resolvedFileName = mp4File.path.split(RegExp(r'[/\\]')).last;
       final int lastDotIndex = resolvedFileName.lastIndexOf('.');
@@ -1696,25 +1697,24 @@ void main() async {
       final thumbPath = '$thumbDir/$baseNameWithoutExt.jpg';
       var thumbFile = File(thumbPath);
 
-      // 3. 🚀 If thumbnail doesn't exist, generate it seamlessly using FFmpeg
+      // 3. Generate thumbnail seamlessly using FFmpeg if missing
       if (!await thumbFile.exists()) {
         print('📸 Generating missing thumbnail for $videoId...');
         
         final processResult = await Process.run('ffmpeg', [
           '-i', mp4File.path,
-          '-ss', '00:00:02.000', // Capture frame at the 2-second mark
+          '-ss', '00:00:02.000',
           '-vframes', '1',
-          '-q:v', '2',           // High quality JPEG configuration
-          '-y',                  // Automatically overwrite file if duplicate thread spawns
+          '-q:v', '2',
+          '-y',
           thumbPath
-        ], runInShell: true);    // Required layer tracking for Linux environments
+        ], runInShell: true);
 
         if (processResult.exitCode != 0) {
           print('❌ FFmpeg failed: ${processResult.stderr}');
           return Response(404, body: 'Failed to generate thumbnail via FFmpeg.');
         }
         
-        // Refresh instance targeting references now that it sits safely on disk
         thumbFile = File(thumbPath); 
       }
 
@@ -1722,7 +1722,7 @@ void main() async {
       return Response(200, body: thumbFile.openRead(), headers: {
         'Content-Type': 'image/jpeg',
         'Content-Length': (await thumbFile.length()).toString(),
-        'Cache-Control': 'public, max-age=86400', // Cache it for 24 hours to reduce CPU overhead
+        'Cache-Control': 'public, max-age=86400',
       });
 
     } catch (e) {
@@ -1996,9 +1996,9 @@ void main() async {
         settings: const ConnectionSettings(sslMode: SslMode.disable),
       );
       
-      // 🚀 FIXED: Now it grabs view_count_local from the database!
+      // 🚀 FIXED: Uses id::text instead of CAST to prevent crashes on corrupted data
       final result = await connection.execute(
-        Sql.named("SELECT like_count_local, comment_count_local, save_count_local, view_count_local, repost_count_local FROM mp_videos WHERE id = CAST(@vid AS UUID) LIMIT 1"),
+        Sql.named("SELECT like_count_local, comment_count_local, save_count_local, view_count_local, repost_count_local FROM mp_videos WHERE id::text = @vid LIMIT 1"),
         parameters: {'vid': videoId}
       );
       
@@ -2010,8 +2010,8 @@ void main() async {
         'likes': result.first[0] ?? 0,
         'comments': result.first[1] ?? 0,
         'saves': result.first[2] ?? 0,
-        'views': result.first[3] ?? 0, // 🚀 FIXED: Sends views to the Media Player!
-        'reposts': result.first[4] ?? 0 // 🚀 FIXED: Sends repost count so the UI can display/sync it
+        'views': result.first[3] ?? 0,
+        'reposts': result.first[4] ?? 0 
       }), headers: {'Content-Type': 'application/json'});
     } catch (e) {
       return Response(500, body: 'Stats Error: $e');
@@ -2177,7 +2177,26 @@ void main() async {
       final String vid = data['original_video_id'].toString();
       final String reposterUid = data['reposter_uid'].toString();
 
-      // 1. 🚀 GATEKEEPER: Prevent duplicate reposts by the same user
+      // Ensure repost table exists
+      await connection.execute("""
+        CREATE TABLE IF NOT EXISTS mp_repost_videos (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          original_video_id TEXT NOT NULL,
+          original_creator_uid TEXT NOT NULL,
+          original_creator_name TEXT DEFAULT '',
+          original_channel_name TEXT DEFAULT '',
+          reposter_uid TEXT NOT NULL,
+          reposter_channel_name TEXT DEFAULT '',
+          repost_comment TEXT,
+          reposted_at TIMESTAMPTZ DEFAULT NOW(),
+          repost_likes INTEGER DEFAULT 0,
+          repost_comments INTEGER DEFAULT 0
+        )
+      """);
+
+      await connection.execute("ALTER TABLE mp_videos ADD COLUMN IF NOT EXISTS repost_count_local INTEGER DEFAULT 0;");
+
+      // 1. Check existing repost
       final checkExisting = await connection.execute(
         Sql.named("SELECT id FROM mp_repost_videos WHERE original_video_id = @vid AND reposter_uid = @ruid LIMIT 1"),
         parameters: {'vid': vid, 'ruid': reposterUid}
@@ -2188,7 +2207,7 @@ void main() async {
         return Response(200, body: jsonEncode({'status': 'already_reposted'}));
       }
 
-      // 2. Insert the repost with original creator attribution
+      // 2. Insert repost
       await connection.execute(
         Sql.named("""
           INSERT INTO mp_repost_videos
@@ -2207,20 +2226,22 @@ void main() async {
         }
       );
 
-      // 3. Increment the original video's repost count
+      // 3. Increment counter safely
       await connection.execute(
-        Sql.named("UPDATE mp_videos SET repost_count_local = repost_count_local + 1 WHERE id = CAST(@vid AS UUID)"),
+        Sql.named("UPDATE mp_videos SET repost_count_local = repost_count_local + 1 WHERE id::text = @vid"),
         parameters: {'vid': vid}
       );
 
       await connection.close();
       return Response(200, body: jsonEncode({'status': 'reposted'}));
     } catch (e) {
-      return Response(500, body: 'Repost Error: $e');
+      // 🚀 Prints the exact Postgres/Dart error to your Docker console so we can see it!
+      print('❌ DOCKER REPOST SERVER ERROR: $e');
+      return Response(500, body: jsonEncode({'error': 'Repost Error: $e'}));
     }
   });
-
-  // 🚀 WATCHER INTEREST ROUTE: records whether a watcher is interested or not
+  
+    // 🚀 WATCHER INTEREST ROUTE: records whether a watcher is interested or not
   // interested in a video. Upserts into mp_watcher_interest (UNIQUE on
   // video_id + watcher_uid) so a watcher can change their mind. `interested`
   // in the payload is tri-state: true -> 'interested', false -> 'not_interested',

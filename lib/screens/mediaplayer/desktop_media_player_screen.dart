@@ -7,6 +7,7 @@ import 'package:media_kit_video/media_kit_video.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:http/http.dart' as http;
 import 'dart:math' as math;
+import 'package:uuid/uuid.dart';
 
 import '../../models/mediaplayer/player_video_model.dart';
 import '../../models/mediaplayer/player_comment_model.dart';
@@ -42,8 +43,6 @@ class _DesktopMediaPlayerScreenState extends State<DesktopMediaPlayerScreen> wit
   late final PlayerApiService _apiService;
   late final AnimationController _shakeController;
   late final Animation<double> _shakeAnimation;
-  // 🚀 Normalized creator gateway URL — used to fetch stickers (and stream)
-  // from the CREATOR's node so any viewer sees the creator's shoppable stickers.
   late final String safeUrl;
 
   late int _currentLikes;
@@ -56,7 +55,6 @@ class _DesktopMediaPlayerScreenState extends State<DesktopMediaPlayerScreen> wit
   String _nodeError = '';
   bool _ageConfirmed = false;
 
-  // 🚀 WATCHER INTEREST: 'interested' / 'not_interested' / null (no choice yet).
   String? _watcherInterest;
   final PlayerWatcherInterestService _interestService =
       PlayerWatcherInterestService();
@@ -66,7 +64,6 @@ class _DesktopMediaPlayerScreenState extends State<DesktopMediaPlayerScreen> wit
   void initState() {
     super.initState();
     
-    // 🚀 SHAKE ANIMATION SETUP
     _shakeController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 500),
@@ -80,8 +77,6 @@ class _DesktopMediaPlayerScreenState extends State<DesktopMediaPlayerScreen> wit
     _currentViews = widget.video.viewCount;
     _repostCount = widget.video.repostCount;
     
-    // 🚀 Normalize the URL: strips whitespace, and uses http:// for local
-    // addresses (Docker gateway is plain HTTP) and https:// for tunnels.
     safeUrl = DockerService.normalizeGatewayUrl(widget.video.creatorUrl);
         
     debugPrint('🚨 SECURE STREAMING URL: $safeUrl');
@@ -99,27 +94,17 @@ class _DesktopMediaPlayerScreenState extends State<DesktopMediaPlayerScreen> wit
     
     debugPrint("🎬 ATTEMPTING TO STREAM: $streamUrl"); 
 
-    // 🚀 AGE GATE (YouTube-style): for age-restricted (18+) content ONLY, do NOT
-    // auto-play. Show a confirmation dialog first; only open the player after
-    // the viewer confirms they are 18 or older. A "Made for Kids" video must
-    // NEVER trigger this gate — kids' content plays normally (it is a
-    // classification, not a restriction). The `!madeForKids` guard guarantees
-    // a kids video can never be gated even if the stored age_rating is wrong.
     if (widget.video.ageRating == '18+' && !widget.video.madeForKids) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) _showAgeGate(safeUrl, streamUrl);
       });
     } else {
-      // 🚀 Pre-check: verify the creator's node is reachable before opening the player,
-      // so the user sees a clear error instead of a silent black screen.
       _checkNodeReachable(safeUrl, streamUrl);
     }
 
-    // 🚀 Vault Check: Verify if this video is already saved on local Postgres upon loading
     _checkIfSaved();
   }
 
-  // 🚀 Check local Postgres to see if this video is already saved
   Future<void> _checkIfSaved() async {
     final currentUser = Supabase.instance.client.auth.currentUser;
     if (currentUser == null) return;
@@ -136,7 +121,6 @@ class _DesktopMediaPlayerScreenState extends State<DesktopMediaPlayerScreen> wit
     }
   }
 
-  // 🚀 AGE GATE DIALOG: mirrors YouTube's mature-content confirmation.
   void _showAgeGate(String safeUrl, String streamUrl) {
     showDialog(
       context: context,
@@ -184,7 +168,6 @@ class _DesktopMediaPlayerScreenState extends State<DesktopMediaPlayerScreen> wit
     );
   }
 
-  // 🚀 AUDIENCE BADGES: YouTube-style "Made for Kids" + "18+" indicators.
   List<Widget> _buildAudienceBadges() {
     final badges = <Widget>[];
     if (widget.video.madeForKids) {
@@ -289,9 +272,6 @@ class _DesktopMediaPlayerScreenState extends State<DesktopMediaPlayerScreen> wit
       'desktop_session_${DateTime.now().millisecondsSinceEpoch}'
     );
 
-    // 🚀 Append-only local watch log: ensures a video watched yesterday and
-    // again today appears in BOTH days (the backend de-dupes by video_id and
-    // would otherwise drop it from the earlier day).
     WatchHistoryLocalStore.recordWatch(widget.video, DateTime.now());
 
     player.dispose();
@@ -315,7 +295,7 @@ class _DesktopMediaPlayerScreenState extends State<DesktopMediaPlayerScreen> wit
   }
 
   Future<void> _handleSave() async {
-    if (_isSaved) return; // Prevent double saving
+    if (_isSaved) return;
     final success = await _apiService.saveVideo(widget.video.videoId, widget.video.creatorUid);
     if (success && mounted) {
       setState(() => _isSaved = true); 
@@ -325,10 +305,6 @@ class _DesktopMediaPlayerScreenState extends State<DesktopMediaPlayerScreen> wit
     }
   }
 
-  /// 🚀 REPOST: Re-shares the current video to the viewer's own channel/profile
-  /// while preserving original creator attribution. Calls the Docker gateway
-  /// `/player/video/repost` endpoint via PlayerApiService (consistent with
-  /// like/comment/save/view engagement actions).
   Future<void> _handleRepost() async {
     final currentUser = Supabase.instance.client.auth.currentUser;
     if (currentUser == null) {
@@ -352,21 +328,28 @@ class _DesktopMediaPlayerScreenState extends State<DesktopMediaPlayerScreen> wit
       return;
     }
 
+    // 🚀 THE FIX: Get User A's (the reposter's) actual name from their Supabase session!
+    final reposterName = currentUser.userMetadata?['channel_name'] ?? 
+                         currentUser.userMetadata?['username'] ?? 
+                         currentUser.email?.split('@')[0] ?? 
+                         'Creator';
+
+    debugPrint('🚀 ATTEMPTING REPOST: videoId=${widget.video.videoId}, creatorUid=${widget.video.creatorUid}');
+
     // 1. Call local Docker gateway repost endpoint
-    final success = await _apiService.repostVideo(
+    final success = await _apiService.repostVideo(  
       originalVideoId: widget.video.videoId,
       originalCreatorUid: widget.video.creatorUid,
       originalCreatorName: widget.video.channelName,
       originalChannelName: widget.video.channelName,
       reposterUid: currentUser.id,
-      reposterChannelName: widget.video.channelName,
+      reposterChannelName: reposterName, // 🚀 FIXED: Now uses User A's name
     );
 
     if (success && mounted) {
       try {
         final supabase = Supabase.instance.client;
         
-        // Find the original master row's UUID id
         final orig = await supabase
             .from('mp_videos')
             .select('id')
@@ -376,14 +359,12 @@ class _DesktopMediaPlayerScreenState extends State<DesktopMediaPlayerScreen> wit
         final origRowId = orig?['id']?.toString();
         
         if (origRowId != null) {
-          final repostVideoId = math.Random(DateTime.now().millisecondsSinceEpoch).toString();
+          final repostVideoId = const Uuid().v4();
           
-          // 🚀 GLOBAL FEED SYNC: Insert a row attributed to the REPOSTER (User A), 
-          // pointing `repost_id` to the original row id (User B).
           await supabase.from('mp_videos').insert({
             'video_id': repostVideoId,
             'creator_uid': currentUser.id,
-            'channel_name': widget.video.channelName,
+            'channel_name': reposterName, // 🚀 FIXED: Now uses User A's name
             'title': widget.video.title,
             'description': widget.video.description,
             'creator_cloudflare_url': widget.video.originalCreatorUrl ?? widget.video.creatorUrl,
@@ -394,21 +375,20 @@ class _DesktopMediaPlayerScreenState extends State<DesktopMediaPlayerScreen> wit
             'is_monetized': false,
             'made_for_kids': widget.video.madeForKids,
             'age_rating': widget.video.ageRating,
-            'repost_id': origRowId, // Links back to User B's master record
+            'repost_id': origRowId,
           });
         }
       } catch (e) {
         debugPrint('Repost global feed insert error (non-fatal): $e');
       }
 
-      // 2. Record the repost locally so it appears in the user's local "Repost Videos" folder
       await PlayerOrganizationService().saveLocalRepost(
         originalVideoId: widget.video.videoId,
         originalCreatorUid: widget.video.creatorUid,
         originalCreatorName: widget.video.channelName,
         originalChannelName: widget.video.channelName,
         reposterUid: currentUser.id,
-        reposterChannelName: widget.video.channelName,
+        reposterChannelName: reposterName,
       );
 
       setState(() {
@@ -420,14 +400,13 @@ class _DesktopMediaPlayerScreenState extends State<DesktopMediaPlayerScreen> wit
         const SnackBar(content: Text('Video reposted to your profile!'), backgroundColor: Colors.green),
       );
     } else if (mounted) {
+      debugPrint('❌ REPOST FAILED via API service response.');
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Failed to repost video.'), backgroundColor: Colors.redAccent),
       );
     }
   }
 
-  /// 🚀 ADVANCED COMMENT DIALOG — Uses PlayerCommentWidget with nested replies,
-  /// reactions (like/heart/clap/laugh/disagree), edit/delete, and report.
   void _showCommentDialog() {
     final commentController = TextEditingController();
     final currentUser = Supabase.instance.client.auth.currentUser;
@@ -543,7 +522,7 @@ class _DesktopMediaPlayerScreenState extends State<DesktopMediaPlayerScreen> wit
                                   widget.video.videoId,
                                   widget.video.creatorUid,
                                   commentController.text,
-                                  viewerName: viewerName, // 🚀 Passes the actual username correctly!
+                                  viewerName: viewerName,
                                 );
 
                                 if (success) {
@@ -612,8 +591,6 @@ class _DesktopMediaPlayerScreenState extends State<DesktopMediaPlayerScreen> wit
     }
   }
 
-  // 🚀 WATCHER INTEREST: load the watcher's saved interest for this video so
-  // the UI can show the correct "Interested" / "Not interested" chip state.
   Future<void> _loadWatcherInterest(String watcherUid) async {
     final interest = await _interestService.getInterest(
       videoId: widget.video.videoId,
@@ -622,13 +599,11 @@ class _DesktopMediaPlayerScreenState extends State<DesktopMediaPlayerScreen> wit
     if (mounted) setState(() => _watcherInterest = interest);
   }
 
-  // 🚀 WATCHER INTEREST: set interested / not_interested / clear for this video.
   Future<void> _setWatcherInterest(String? interest) async {
     final currentUser = Supabase.instance.client.auth.currentUser;
     if (currentUser == null) return;
 
     if (interest == null) {
-      // Clear feedback
       await _interestService.setInterest(
         videoId: widget.video.videoId,
         creatorUid: widget.video.creatorUid,
@@ -646,7 +621,6 @@ class _DesktopMediaPlayerScreenState extends State<DesktopMediaPlayerScreen> wit
     if (mounted) setState(() => _watcherInterest = interest);
   }
 
-  // 🚀 REPORT: opens a dialog to file a report for the current video.
   void _showReportDialog() {
     final descController = TextEditingController();
     String selectedType = 'spam';
@@ -763,14 +737,12 @@ class _DesktopMediaPlayerScreenState extends State<DesktopMediaPlayerScreen> wit
     );
   }
 
-  // 🚀 SHAKE ANIMATION TRIGGER: Called when user touches top or bottom of video
   void _triggerShake() {
     _shakeController.forward(from: 0).then((_) {
       _shakeController.reset();
     });
   }
 
-  // 🚀 SHAKE TRANSFORMATION: Creates a shaking effect for the border
   double _getShakeOffset(double value) {
     final shakeAmount = math.sin(value * 2 * math.pi * 8) * 8;
     return shakeAmount;
@@ -811,9 +783,6 @@ class _DesktopMediaPlayerScreenState extends State<DesktopMediaPlayerScreen> wit
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // =================================================================
-            // MAIN LEFT SECTION (70% Width)
-            // =================================================================
             Expanded(
               flex: 7,
               child: SingleChildScrollView(
@@ -880,7 +849,6 @@ class _DesktopMediaPlayerScreenState extends State<DesktopMediaPlayerScreen> wit
                         );
                       },
                     ),
-                    // 🚀 TOP/BOTTOM TOUCH DETECTORS for shake effect
                     GestureDetector(
                       behavior: HitTestBehavior.translucent,
                       onTap: _triggerShake,
@@ -909,9 +877,6 @@ class _DesktopMediaPlayerScreenState extends State<DesktopMediaPlayerScreen> wit
                     ),
                     const SizedBox(height: 8),
 
-                    // 🚀 REPOST ATTRIBUTION: when this video is a repost, show the
-                    // reposter (this row's creator) as the actual creator, and
-                    // surface the original creator as "reposted from".
                     if (widget.video.isRepost) ...[
                       Container(
                         margin: const EdgeInsets.only(bottom: 12),
@@ -976,7 +941,6 @@ class _DesktopMediaPlayerScreenState extends State<DesktopMediaPlayerScreen> wit
                     ),
                     const SizedBox(height: 16),
 
-                    // 🚀 AUDIENCE BADGES (Made for Kids / 18+) shown in the player header.
                     if (widget.video.madeForKids || widget.video.ageRating == '18+')
                       Wrap(
                         spacing: 8,
@@ -1051,7 +1015,6 @@ class _DesktopMediaPlayerScreenState extends State<DesktopMediaPlayerScreen> wit
                     ),
                     const SizedBox(height: 16),
 
-                    // 🚀 WATCHER INTEREST: Interested / Not interested / Clear chips.
                     Wrap(
                       spacing: 8,
                       runSpacing: 8,
@@ -1104,9 +1067,6 @@ class _DesktopMediaPlayerScreenState extends State<DesktopMediaPlayerScreen> wit
               ),
             ),
 
-            // =================================================================
-            // 🚀 ASYMMETRIC CURVED SIDEBAR (Right Section)
-            // =================================================================
            Expanded(
               flex: 3,
               child: Container(
@@ -1133,7 +1093,6 @@ class _DesktopMediaPlayerScreenState extends State<DesktopMediaPlayerScreen> wit
                   ),
                   child: Column(
                     children: [
-                      // Sidebar Header
                       Container(
                         padding: const EdgeInsets.fromLTRB(32, 24, 24, 24), 
                         decoration: BoxDecoration(
@@ -1149,7 +1108,6 @@ class _DesktopMediaPlayerScreenState extends State<DesktopMediaPlayerScreen> wit
                         ),
                       ),
                       
-                      // 🚀 ListWheelScrollView for the 3D curved scroll effect
                       Expanded(
                         child: FutureBuilder<List<PlayerVideo>>(
                           future: _apiService.fetchNetworkFeed(), 

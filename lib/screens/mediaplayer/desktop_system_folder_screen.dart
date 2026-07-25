@@ -2,6 +2,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:postgres/postgres.dart';
+import 'package:supabase_flutter/supabase_flutter.dart'; // 🚀 Added to fetch global reposts
 import '../../models/mediaplayer/player_video_model.dart';
 import '../../widgets/mediaplayer/player_video_card.dart';
 import '../../services/external/postgres_service.dart';
@@ -41,107 +42,147 @@ class _DesktopSystemFolderScreenState extends State<DesktopSystemFolderScreen> {
       const secureStorage = FlutterSecureStorage();
       _publicUrl = await secureStorage.read(key: 'public_url') ?? 'localhost';
       
-      // 2. 🚀 SMART FIX: Parse fallback layout constraints directly on raw system properties
+      // 2. Parse fallback layout constraints directly on raw system properties
       final safeUrl = _publicUrl!.startsWith('http') 
           ? _publicUrl! 
           : (_publicUrl!.contains('localhost') || _publicUrl!.contains('127.0.0.1') || _publicUrl!.contains(':'))
               ? 'http://$_publicUrl'
               : 'https://$_publicUrl';
 
-      // 3. Connect directly to the local Postgres Node!
-      final connection = await Connection.open(
-        Endpoint(host: 'localhost', port: 55432, database: 'postgres', username: 'postgres', password: PostgresService.dockerMasterPassword),
-        settings: const ConnectionSettings(sslMode: SslMode.disable),
-      );
-
-      Result? result;
-
-      // 4. DYNAMIC ROUTING: Fetch different data based on the folder!
-      if (widget.folderType == 'posted') {
-        result = await connection.execute('''
-          SELECT v.id, v.title, v.description, v.file_path, v.view_count_local, 
-                 v.like_count_local, v.comment_count_local, c.channel_name, v.is_reel, v.upload_timestamp, c.channel_id
-          FROM mp_videos v
-          JOIN mp_channels c ON v.channel_id = c.channel_id
-          WHERE v.is_deleted = false
-          ORDER BY v.upload_timestamp DESC
-        ''');
-      } else if (widget.folderType == 'saved') {
-        result = await connection.execute('''
-          SELECT v.id, v.title, v.description, v.file_path, v.view_count_local, 
-                 v.like_count_local, v.comment_count_local, c.channel_name, v.is_reel, s.saved_timestamp, c.channel_id
-          FROM mp_saved_videos s
-          JOIN mp_videos v ON s.video_id = v.id::text
-          JOIN mp_channels c ON v.channel_id = c.channel_id
-          ORDER BY s.saved_timestamp DESC
-        ''');
-      } else if (widget.folderType == 'drafts') {
-        result = await connection.execute('''
-          SELECT d.id, COALESCE(d.title, 'Untitled Draft'), COALESCE(d.description, ''),
-                 COALESCE(d.file_path_temp, ''), 0, 0, 0,
-                 COALESCE(c.channel_name, 'Draft'), false,
-                 d.last_edited_at, COALESCE(d.channel_id, '')
-          FROM mp_draft_videos d
-          LEFT JOIN mp_channels c ON d.channel_id = c.channel_id
-          ORDER BY d.last_edited_at DESC
-        ''');
-      } else if (widget.folderType == 'repost') {
-        // 🚀 REPOSTS FOLDER: Fetch rows from local mp_repost_videos joined to mp_videos
-        result = await connection.execute('''
-          SELECT v.id, v.title, v.description, v.file_path, v.view_count_local,
-                 v.like_count_local, v.comment_count_local, c.channel_name, v.is_reel, r.reposted_at, c.channel_id
-          FROM mp_repost_videos r
-          JOIN mp_videos v ON r.original_video_id = v.id::text
-          JOIN mp_channels c ON v.channel_id = c.channel_id
-          ORDER BY r.reposted_at DESC
-        ''');
-      }else if (widget.folderType == 'stickers') {
-        result = await connection.execute('''
-          SELECT id::text, product_name, image_path, price, currency, created_at
-          FROM mp_sticker_products_catalog
-          WHERE is_active = TRUE
-          ORDER BY created_at DESC
-        ''');
-      }
-
-      await connection.close();
-
-      // 5. Map the DB rows directly to your PlayerVideo models!
       final List<PlayerVideo> loadedVideos = [];
-      
-      if (result != null) {
-        for (final row in result) {
-          // If loading stickers, map fields safely to the PlayerVideo schema
-          if (widget.folderType == 'stickers') {
-            final Map<String, dynamic> stickerJsonMap = {
-              'video_id': row[0].toString(),
-              'title': row[1].toString(),
-              'description': 'Price: ${row[4]} ${row[3]}',
-              'file_path': row[2]?.toString() ?? '',
-              'view_count': 0,
-              'like_count': 0,
-              'comment_count': 0,
-              'channel_name': 'Sticker Asset',
-              'is_reel': false,
-              'created_at': row[5]?.toString() ?? DateTime.now().toString(),
-              'creator_uid': 'local_sticker',
-            };
-            loadedVideos.add(PlayerVideo.fromJson(stickerJsonMap, safeUrl));
-          } else {
-            final Map<String, dynamic> jsonMap = {
-              'video_id': row[0].toString(),
-              'title': row[1].toString(),
-              'description': row[2]?.toString() ?? '',
-              'file_path': row[3].toString(),
-              'view_count': row[4] ?? 0,
-              'like_count': row[5] ?? 0,
-              'comment_count': row[6] ?? 0,
-              'channel_name': row[7]?.toString() ?? 'Creator',
-              'is_reel': row[8] as bool? ?? false,
-              'created_at': row[9]?.toString() ?? DateTime.now().toString(),
-              'creator_uid': row[10].toString(),
-            };
-            loadedVideos.add(PlayerVideo.fromJson(jsonMap, safeUrl));
+
+      // 🚀 THE FIX: Reposts must be fetched from Supabase, not local Postgres!
+      // Since reposts belong to other creators, your local mp_videos table doesn't have the files.
+    // 🚀 THE FIX: Reposts must be fetched from Supabase, not local Postgres!
+      if (widget.folderType == 'repost') {
+        final supabase = Supabase.instance.client;
+        final currentUser = supabase.auth.currentUser;
+        if (currentUser != null) {
+          // 1. Fetch this user's repost rows (NO JOINS!)
+          final response = await supabase
+              .from('mp_videos')
+              .select('*')
+              .eq('creator_uid', currentUser.id)
+              .not('repost_id', 'is', null)
+              .order('published_at', ascending: false);
+
+          final List<Map<String, dynamic>> userReposts = List<Map<String, dynamic>>.from(response as List);
+          final List<String> repostIds = userReposts.map((v) => v['repost_id'].toString()).toList();
+
+          // 2. Fetch the original physical videos
+          if (repostIds.isNotEmpty) {
+            final originalsResponse = await supabase
+                .from('mp_videos')
+                .select('*')
+                .filter('id', 'in', repostIds);
+                
+            final Map<String, Map<String, dynamic>> origMap = {};
+            for (final o in originalsResponse as List) {
+              origMap[o['id'].toString()] = Map<String, dynamic>.from(o);
+            }
+
+            // 3. Inject the real physical video metadata into the UI
+            for (final v in userReposts) {
+              final orig = origMap[v['repost_id'].toString()];
+              if (orig != null) {
+                // 🚀 ID SWAP: Ensures the Vault player requests the real video file!
+                v['video_id'] = orig['video_id'] ?? orig['id'];
+                v['id'] = orig['id'];
+                v['creator_uid'] = orig['creator_uid'];
+                v['creator_cloudflare_url'] = orig['creator_cloudflare_url'];
+                v['thumbnail_url'] = orig['thumbnail_url'];
+                v['original_channel_name'] = orig['channel_name'];
+                v['is_repost'] = true;
+
+                final nodeUrl = v['creator_cloudflare_url'] ?? safeUrl;
+                loadedVideos.add(PlayerVideo.fromJson(v, nodeUrl));
+              }
+            }
+          }
+        }
+      } else {
+        // 3. Connect directly to the local Postgres Node for local folders!
+        final connection = await Connection.open(
+          Endpoint(host: 'localhost', port: 55432, database: 'postgres', username: 'postgres', password: PostgresService.dockerMasterPassword),
+          settings: const ConnectionSettings(sslMode: SslMode.disable),
+        );
+
+        Result? result;
+
+        // 4. DYNAMIC ROUTING: Fetch different data based on the folder!
+        if (widget.folderType == 'posted') {
+          result = await connection.execute('''
+            SELECT v.id, v.title, v.description, v.file_path, v.view_count_local, 
+                   v.like_count_local, v.comment_count_local, c.channel_name, v.is_reel, v.upload_timestamp, c.channel_id
+            FROM mp_videos v
+            JOIN mp_channels c ON v.channel_id = c.channel_id
+            WHERE v.is_deleted = false
+            ORDER BY v.upload_timestamp DESC
+          ''');
+        } else if (widget.folderType == 'saved') {
+          result = await connection.execute('''
+            SELECT v.id, v.title, v.description, v.file_path, v.view_count_local, 
+                   v.like_count_local, v.comment_count_local, c.channel_name, v.is_reel, s.saved_timestamp, c.channel_id
+            FROM mp_saved_videos s
+            JOIN mp_videos v ON s.video_id = v.id::text
+            JOIN mp_channels c ON v.channel_id = c.channel_id
+            ORDER BY s.saved_timestamp DESC
+          ''');
+        } else if (widget.folderType == 'drafts') {
+          result = await connection.execute('''
+            SELECT d.id, COALESCE(d.title, 'Untitled Draft'), COALESCE(d.description, ''),
+                   COALESCE(d.file_path_temp, ''), 0, 0, 0,
+                   COALESCE(c.channel_name, 'Draft'), false,
+                   d.last_edited_at, COALESCE(d.channel_id, '')
+            FROM mp_draft_videos d
+            LEFT JOIN mp_channels c ON d.channel_id = c.channel_id
+            ORDER BY d.last_edited_at DESC
+          ''');
+        } else if (widget.folderType == 'stickers') {
+          result = await connection.execute('''
+            SELECT id::text, product_name, image_path, price, currency, created_at
+            FROM mp_sticker_products_catalog
+            WHERE is_active = TRUE
+            ORDER BY created_at DESC
+          ''');
+        }
+
+        await connection.close();
+
+        // 5. Map the DB rows directly to your PlayerVideo models!
+        if (result != null) {
+          for (final row in result) {
+            if (widget.folderType == 'stickers') {
+              final Map<String, dynamic> stickerJsonMap = {
+                'video_id': row[0].toString(),
+                'title': row[1].toString(),
+                'description': 'Price: ${row[4]} ${row[3]}',
+                'file_path': row[2]?.toString() ?? '',
+                'view_count': 0,
+                'like_count': 0,
+                'comment_count': 0,
+                'channel_name': 'Sticker Asset',
+                'is_reel': false,
+                'created_at': row[5]?.toString() ?? DateTime.now().toString(),
+                'creator_uid': 'local_sticker',
+              };
+              loadedVideos.add(PlayerVideo.fromJson(stickerJsonMap, safeUrl));
+            } else {
+              final Map<String, dynamic> jsonMap = {
+                'video_id': row[0].toString(),
+                'title': row[1].toString(),
+                'description': row[2]?.toString() ?? '',
+                'file_path': row[3].toString(),
+                'view_count': row[4] ?? 0,
+                'like_count': row[5] ?? 0,
+                'comment_count': row[6] ?? 0,
+                'channel_name': row[7]?.toString() ?? 'Creator',
+                'is_reel': row[8] as bool? ?? false,
+                'created_at': row[9]?.toString() ?? DateTime.now().toString(),
+                'creator_uid': row[10].toString(),
+              };
+              loadedVideos.add(PlayerVideo.fromJson(jsonMap, safeUrl));
+            }
           }
         }
       }

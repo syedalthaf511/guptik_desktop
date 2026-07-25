@@ -52,10 +52,14 @@ class PostgresService {
       _isConnected = true;
       print("✅ Database Connected!");
 
-    // 🚀 THE MAGIC FIX: This runs as the superuser, so it will NEVER throw a permission error!
+      // 🚀 THE MAGIC FIX: This runs as the superuser, so it will NEVER throw a permission error!
       try {
-        await _connection!.execute('ALTER TABLE mp_commented_videos ADD COLUMN IF NOT EXISTS viewer_name TEXT DEFAULT \'Creator\';');
-        await _connection!.execute('ALTER TABLE mp_commented_videos ADD COLUMN IF NOT EXISTS parent_comment_id TEXT;');
+        await _connection!.execute(
+          'ALTER TABLE mp_commented_videos ADD COLUMN IF NOT EXISTS viewer_name TEXT DEFAULT \'Creator\';',
+        );
+        await _connection!.execute(
+          'ALTER TABLE mp_commented_videos ADD COLUMN IF NOT EXISTS parent_comment_id TEXT;',
+        );
         print("✅ DB Check: mp_commented_videos migration columns are ready.");
       } catch (e) {
         print("Migration warning: $e");
@@ -63,14 +67,20 @@ class PostgresService {
 
       // 🚀 THE MIGRATION FIX: Check and add the column every time we connect!
       try {
-        await _connection!.execute('ALTER TABLE tm_contacts ADD COLUMN IF NOT EXISTS custom_username TEXT;');
+        await _connection!.execute(
+          'ALTER TABLE tm_contacts ADD COLUMN IF NOT EXISTS custom_username TEXT;',
+        );
         print("✅ DB Check: custom_username column is ready.");
       } catch (_) {}
 
       // 🚀 AUDIENCE MIGRATION: ensure the audience columns exist on existing installs.
       try {
-        await _connection!.execute('ALTER TABLE mp_videos ADD COLUMN IF NOT EXISTS made_for_kids BOOLEAN DEFAULT FALSE;');
-        await _connection!.execute("ALTER TABLE mp_videos ADD COLUMN IF NOT EXISTS age_rating TEXT DEFAULT 'all';");
+        await _connection!.execute(
+          'ALTER TABLE mp_videos ADD COLUMN IF NOT EXISTS made_for_kids BOOLEAN DEFAULT FALSE;',
+        );
+        await _connection!.execute(
+          "ALTER TABLE mp_videos ADD COLUMN IF NOT EXISTS age_rating TEXT DEFAULT 'all';",
+        );
         print("✅ DB Check: mp_videos audience columns are ready.");
       } catch (_) {}
 
@@ -80,7 +90,9 @@ class PostgresService {
       // setupDefaultDatabase. Kept nullable because non-reposted videos have
       // no parent. Mirrors the admin-side mp_videos.repost_id column.
       try {
-        await _connection!.execute('ALTER TABLE mp_videos ADD COLUMN IF NOT EXISTS repost_id UUID;');
+        await _connection!.execute(
+          'ALTER TABLE mp_videos ADD COLUMN IF NOT EXISTS repost_id UUID;',
+        );
         print("✅ DB Check: mp_videos.repost_id column is ready.");
       } catch (_) {}
 
@@ -100,7 +112,9 @@ class PostgresService {
             UNIQUE(video_id, watcher_uid)
           )
         ''');
-        await _connection!.execute('CREATE INDEX IF NOT EXISTS idx_mp_watcher_interest_watcher ON mp_watcher_interest(watcher_uid);');
+        await _connection!.execute(
+          'CREATE INDEX IF NOT EXISTS idx_mp_watcher_interest_watcher ON mp_watcher_interest(watcher_uid);',
+        );
         print("✅ DB Check: mp_watcher_interest table is ready.");
       } catch (_) {}
 
@@ -124,7 +138,6 @@ class PostgresService {
         ''');
         print("✅ DB Check: mp_reports table is ready.");
       } catch (_) {}
-
     } catch (e) {
       print("❌ Database Connection Failed: $e");
     }
@@ -135,6 +148,7 @@ class PostgresService {
     _isConnected = false;
     print("🔌 Database Disconnected");
   }
+
   Future<void> connectExistingUser({
     required String email,
     required String userPassword,
@@ -228,9 +242,6 @@ class PostgresService {
         ''');
         print("✅ DB Check: mp_draft_videos table is ready.");
       } catch (_) {}
-
-     
-
     } catch (e) {
       print("DB Re-connect Error: $e");
       rethrow;
@@ -364,7 +375,7 @@ class PostgresService {
     ''');
 
     // -------------------------------------------------------------------------
-    // PART B: OLLAMA AI 
+    // PART B: OLLAMA AI
     // -------------------------------------------------------------------------
     await conn.execute('''
       CREATE TABLE IF NOT EXISTS ollama_models (
@@ -388,8 +399,6 @@ class PostgresService {
         created_at TIMESTAMPTZ DEFAULT NOW()
       )
     ''');
-
-
 
     // -------------------------------------------------------------------------
     // PART C: TRUST ME (V1 ENTERPRISE SCHEMA) 🚀
@@ -443,14 +452,20 @@ class PostgresService {
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )
     ''');
-    
+
     // SAFEGUARD
     try {
-      await conn.execute('ALTER TABLE tm_contacts ADD COLUMN IF NOT EXISTS custom_username TEXT;');
+      await conn.execute(
+        'ALTER TABLE tm_contacts ADD COLUMN IF NOT EXISTS custom_username TEXT;',
+      );
     } catch (_) {}
 
-    await conn.execute('CREATE INDEX IF NOT EXISTS idx_tm_contacts_username ON tm_contacts(contact_username)');
-    await conn.execute('CREATE INDEX IF NOT EXISTS idx_tm_contacts_status ON tm_contacts(status)');
+    await conn.execute(
+      'CREATE INDEX IF NOT EXISTS idx_tm_contacts_username ON tm_contacts(contact_username)',
+    );
+    await conn.execute(
+      'CREATE INDEX IF NOT EXISTS idx_tm_contacts_status ON tm_contacts(status)',
+    );
 
     // 3. HANDSHAKE SESSIONS
     await conn.execute('''
@@ -493,7 +508,9 @@ class PostgresService {
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )
     ''');
-    await conn.execute('CREATE INDEX IF NOT EXISTS idx_tm_pending_direction ON tm_pending_requests(direction, status)');
+    await conn.execute(
+      'CREATE INDEX IF NOT EXISTS idx_tm_pending_direction ON tm_pending_requests(direction, status)',
+    );
 
     // 5. CONVERSATIONS
     await conn.execute('''
@@ -515,8 +532,12 @@ class PostgresService {
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )
     ''');
-    await conn.execute('CREATE INDEX IF NOT EXISTS idx_tm_conversations_type ON tm_conversations(type)');
-    await conn.execute('CREATE INDEX IF NOT EXISTS idx_tm_conversations_last_msg ON tm_conversations(last_message_at DESC)');
+    await conn.execute(
+      'CREATE INDEX IF NOT EXISTS idx_tm_conversations_type ON tm_conversations(type)',
+    );
+    await conn.execute(
+      'CREATE INDEX IF NOT EXISTS idx_tm_conversations_last_msg ON tm_conversations(last_message_at DESC)',
+    );
 
     // 6. MESSAGES
     await conn.execute('''
@@ -552,8 +573,12 @@ class PostgresService {
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )
     ''');
-    await conn.execute('CREATE INDEX IF NOT EXISTS idx_tm_messages_conversation ON tm_messages(conversation_id, received_at DESC)');
-    await conn.execute('CREATE INDEX IF NOT EXISTS idx_tm_messages_unread ON tm_messages(conversation_id, is_read) WHERE is_read = FALSE');
+    await conn.execute(
+      'CREATE INDEX IF NOT EXISTS idx_tm_messages_conversation ON tm_messages(conversation_id, received_at DESC)',
+    );
+    await conn.execute(
+      'CREATE INDEX IF NOT EXISTS idx_tm_messages_unread ON tm_messages(conversation_id, is_read) WHERE is_read = FALSE',
+    );
 
     // 7. OUTGOING QUEUE
     await conn.execute('''
@@ -576,7 +601,9 @@ class PostgresService {
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )
     ''');
-    await conn.execute('CREATE INDEX IF NOT EXISTS idx_tm_queue_status ON tm_outgoing_queue(status, next_attempt_at)');
+    await conn.execute(
+      'CREATE INDEX IF NOT EXISTS idx_tm_queue_status ON tm_outgoing_queue(status, next_attempt_at)',
+    );
 
     // 8. GROUPS
     await conn.execute('''
@@ -724,7 +751,9 @@ class PostgresService {
       \$\$ LANGUAGE plpgsql
     ''');
 
-    await conn.execute('DROP TRIGGER IF EXISTS tm_presence_notify ON tm_presence');
+    await conn.execute(
+      'DROP TRIGGER IF EXISTS tm_presence_notify ON tm_presence',
+    );
     await conn.execute('''
       CREATE TRIGGER tm_presence_notify
         AFTER INSERT OR UPDATE ON tm_presence
@@ -734,7 +763,7 @@ class PostgresService {
     // -------------------------------------------------------------------------
     // 🚀 PART D: GUPTIK PLAYER (MEDIA ECOSYSTEM)
     // -------------------------------------------------------------------------
-    
+
     await conn.execute('''
       CREATE TABLE IF NOT EXISTS mp_channels (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -758,8 +787,6 @@ class PostgresService {
         updated_at TIMESTAMPTZ DEFAULT NOW()
       )
     ''');
-
-    
 
     await conn.execute('''
       CREATE TABLE IF NOT EXISTS mp_videos (
@@ -810,8 +837,12 @@ class PostgresService {
         deleted_at TIMESTAMPTZ
       )
     ''');
-    await conn.execute('CREATE INDEX IF NOT EXISTS idx_mp_videos_channel ON mp_videos(channel_id)');
-    await conn.execute('CREATE INDEX IF NOT EXISTS idx_mp_videos_upload ON mp_videos(upload_timestamp DESC)');
+    await conn.execute(
+      'CREATE INDEX IF NOT EXISTS idx_mp_videos_channel ON mp_videos(channel_id)',
+    );
+    await conn.execute(
+      'CREATE INDEX IF NOT EXISTS idx_mp_videos_upload ON mp_videos(upload_timestamp DESC)',
+    );
 
     // 🚀 AUDIENCE MIGRATION (self-healing):
     // Older installs created mp_videos before made_for_kids / age_rating existed.
@@ -820,8 +851,12 @@ class PostgresService {
     // fails with 42703 "column made_for_kids does not exist". Adding the columns
     // here on every init guarantees they exist even when the table pre-dates them.
     try {
-      await conn.execute('ALTER TABLE mp_videos ADD COLUMN IF NOT EXISTS made_for_kids BOOLEAN DEFAULT FALSE;');
-      await conn.execute("ALTER TABLE mp_videos ADD COLUMN IF NOT EXISTS age_rating TEXT DEFAULT 'all';");
+      await conn.execute(
+        'ALTER TABLE mp_videos ADD COLUMN IF NOT EXISTS made_for_kids BOOLEAN DEFAULT FALSE;',
+      );
+      await conn.execute(
+        "ALTER TABLE mp_videos ADD COLUMN IF NOT EXISTS age_rating TEXT DEFAULT 'all';",
+      );
       print("✅ DB Check: mp_videos audience columns are ready.");
     } catch (_) {}
 
@@ -830,7 +865,9 @@ class PostgresService {
     // repost. Added via ALTER for existing installs (self-healing above) and
     // here for fresh installs.
     try {
-      await conn.execute('ALTER TABLE mp_videos ADD COLUMN IF NOT EXISTS repost_id UUID;');
+      await conn.execute(
+        'ALTER TABLE mp_videos ADD COLUMN IF NOT EXISTS repost_id UUID;',
+      );
       print("✅ DB Check: mp_videos.repost_id column is ready.");
     } catch (_) {}
 
@@ -848,7 +885,9 @@ class PostgresService {
         UNIQUE(video_id, watcher_uid)
       )
     ''');
-    await conn.execute('CREATE INDEX IF NOT EXISTS idx_mp_watcher_interest_watcher ON mp_watcher_interest(watcher_uid)');
+    await conn.execute(
+      'CREATE INDEX IF NOT EXISTS idx_mp_watcher_interest_watcher ON mp_watcher_interest(watcher_uid)',
+    );
 
     // -------------------------------------------------------------
     // 🚀 REPORTS: local copy of reports filed by this user, mirrored to the
@@ -1045,7 +1084,9 @@ class PostgresService {
         is_incognito BOOLEAN DEFAULT FALSE
       )
     ''');
-    await conn.execute('CREATE INDEX IF NOT EXISTS idx_mp_watch_history_video ON mp_watch_history(video_id)');
+    await conn.execute(
+      'CREATE INDEX IF NOT EXISTS idx_mp_watch_history_video ON mp_watch_history(video_id)',
+    );
 
     await conn.execute('''
       CREATE TABLE IF NOT EXISTS mp_watch_history_tags (
@@ -1055,7 +1096,6 @@ class PostgresService {
         PRIMARY KEY (history_id, tag)
       )
     ''');
-
 
     await conn.execute('''
       CREATE TABLE IF NOT EXISTS mp_liked_videos (
@@ -1069,10 +1109,10 @@ class PostgresService {
     ''');
 
     // -------------------------------------------------------------
-      // 🚀 THE GATEKEEPER: Unique Video Views Tracker
-      // Prevents the same user from spamming views on a single video
-      // -------------------------------------------------------------
-      await conn.execute('''
+    // 🚀 THE GATEKEEPER: Unique Video Views Tracker
+    // Prevents the same user from spamming views on a single video
+    // -------------------------------------------------------------
+    await conn.execute('''
         CREATE TABLE IF NOT EXISTS mp_viewed_videos (
           id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
           video_id TEXT NOT NULL,
@@ -1082,7 +1122,7 @@ class PostgresService {
         )
       ''');
 
-  await conn.execute('''
+    await conn.execute('''
       CREATE TABLE IF NOT EXISTS mp_commented_videos (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         video_id TEXT NOT NULL,
@@ -1201,7 +1241,6 @@ class PostgresService {
       END;
       \$\$ LANGUAGE plpgsql
     ''');
-
   }
 
   // ==============================================================================

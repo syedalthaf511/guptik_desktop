@@ -15,38 +15,66 @@ class PlayerApiService {
   // 🚀 GLOBAL DIRECTORY: Fetch Feed from Admin Supabase Cloud
   // =========================================================================
   
-  /// Fetches the global feed of all published videos across the network.
-  /// This talks to the central Supabase database, NOT the individual nodes.
   Future<List<PlayerVideo>> fetchNetworkFeed() async {
     try {
       final supabase = Supabase.instance.client;
 
-      // Query the global mp_videos table, sorted by newest first.
-      // 🚀 REPOST ATTRIBUTION: `original:mp_videos!repost_id` expands the
-      // parent row (the original video this one re-posted) so the client can
-      // show "reposted from @originalChannelName" while attributing the card
-      // to the reposter (creator_uid of this row). PostgREST names the FK
-      // relationship automatically from the `repost_id` column.
-      // 🚀 Expands the parent row via foreign key `repost_id`
+      // 1. Fetch all videos normally (NO complex joins that crash JSON parsers!)
       final response = await supabase
           .from('mp_videos')
-          .select('*, original:mp_videos!repost_id(*)')
+          .select('*')
           .order('published_at', ascending: false);
       
-      // Map the JSON response to our strict PlayerVideo model.
-      // We pass 'creator_cloudflare_url' so the UI knows exactly which node to stream from.
-      return (response as List)
-          .map((v) => PlayerVideo.fromJson(v, v['creator_cloudflare_url']))
+      final List<Map<String, dynamic>> allVideos = List<Map<String, dynamic>>.from(response as List);
+      
+      // 2. Find any videos that are reposts
+      final List<String> repostIds = allVideos
+          .where((v) => v['repost_id'] != null)
+          .map((v) => v['repost_id'].toString())
           .toList();
+
+      // 3. Fetch the original physical videos for those reposts safely
+      Map<String, Map<String, dynamic>> originalVideosMap = {};
+      if (repostIds.isNotEmpty) {
+        final originalsResponse = await supabase
+            .from('mp_videos')
+            .select('*')
+            .filter('id', 'in', repostIds); 
+            
+        for (final orig in originalsResponse as List) {
+          originalVideosMap[orig['id'].toString()] = Map<String, dynamic>.from(orig);
+        }
+      }
+
+      // 4. Swap the IDs and build the feed!
+      return allVideos.map((v) {
+        if (v['repost_id'] != null) {
+          final orig = originalVideosMap[v['repost_id'].toString()];
+          
+          if (orig != null) {
+            // 🚀 THE MAGIC FIX: Swap the fake repost ID for the real physical video ID!
+            // This ensures the player asks the Creator Node for the CORRECT file, fixing the 404 error!
+            v['video_id'] = orig['video_id'] ?? orig['id']; 
+            v['id'] = orig['id']; 
+            v['creator_uid'] = orig['creator_uid'];
+            v['creator_cloudflare_url'] = orig['creator_cloudflare_url'];
+            v['thumbnail_url'] = orig['thumbnail_url'];
+            
+            // Keep attribution fields so the UI knows it's a repost
+            v['original_channel_name'] = orig['channel_name'];
+            v['is_repost'] = true;
+          }
+        }
+
+        final nodeUrl = v['creator_cloudflare_url'] ?? gatewayUrl ?? 'localhost';
+        return PlayerVideo.fromJson(v, nodeUrl);
+      }).toList();
+      
     } catch (e) {
       debugPrint("Feed fetch error: $e");
       return [];
     }
   }
-
-  // =========================================================================
-  // 🚀 PEER-TO-PEER ENGAGEMENT: Talks directly to Creator's Docker Gateway
-  // =========================================================================
   
   // -------------------------------------------------------------------------
   // WRITE OPERATIONS (POST)
@@ -89,13 +117,20 @@ class PlayerApiService {
   }
 
   /// Submits a new text comment to the creator's local node.
-  Future<bool> postComment(String videoId, String creatorUid, String commentText) async {
+  Future<bool> postComment(
+    String videoId, 
+    String creatorUid, 
+    String commentText,
+    String? parentCommentId,
+    String? viewerName,
+  ) async {
     if (gatewayUrl == null) return false;
     try {
       final response = await http.post(
         Uri.parse('$gatewayUrl/player/video/comment'),
         headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'video_id': videoId, 'creator_uid': creatorUid, 'comment_text': commentText}),
+        body: jsonEncode({'video_id': videoId, 'creator_uid': creatorUid, 'comment_text': commentText,'parent_comment_id': parentCommentId,
+          'viewer_name': viewerName ?? 'Creator',}),
       );
       return response.statusCode == 200;
     } catch (e) { return false; }
