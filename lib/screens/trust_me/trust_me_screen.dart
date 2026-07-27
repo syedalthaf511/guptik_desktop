@@ -15,12 +15,12 @@ class TrustMeScreen extends StatefulWidget {
 }
 
 class _TrustMeScreenState extends State<TrustMeScreen> {
-  int _selectedIndex = 0;
+  int _selectedIndex = 0; // Index 0 is now Secure Chats
   bool _isGeneratingKeys = false;
   bool _isNodeReady = false;
   final _secureStorage = const FlutterSecureStorage();
 
-  // 🚀 NEW ADDED: Variable to hold your REAL permanent Node URL
+  // Variable to hold your REAL permanent Node URL
   String _myNodeUrl = "Loading...";
 
   @override
@@ -29,7 +29,7 @@ class _TrustMeScreenState extends State<TrustMeScreen> {
     _initializeDesktopNode();
   }
 
-  // --- 🚀 DYNAMIC NODE INITIALIZER ---
+  // --- DYNAMIC NODE INITIALIZER ---
   Future<void> _initializeDesktopNode() async {
     setState(() => _isGeneratingKeys = true);
 
@@ -41,11 +41,9 @@ class _TrustMeScreenState extends State<TrustMeScreen> {
       final actualUsername =
           await _secureStorage.read(key: 'current_username') ?? 'unknown_user';
 
-      // 🚀 NEW ADDED: Fetch the REAL URL that Supabase saved to storage
       String fetchedUrl =
           await _secureStorage.read(key: 'public_url') ?? 'URL_NOT_FOUND';
       if (fetchedUrl.isEmpty) {
-        // Fallback just in case it isn't set yet
         fetchedUrl = 'https://$actualGuptikId-guptik.myqrmart.com';
       } else if (!fetchedUrl.startsWith('http')) {
         fetchedUrl = 'https://$fetchedUrl';
@@ -61,7 +59,6 @@ class _TrustMeScreenState extends State<TrustMeScreen> {
         final publicBundle = await TrustCryptoService()
             .generateInitialKeyBundle();
 
-        // 🚀 ADD THIS TO SAVE YOUR REAL KEYS TO MEMORY:
         await _secureStorage.write(
           key: 'my_identity_pubkey',
           value: publicBundle['identity_key'],
@@ -87,7 +84,7 @@ class _TrustMeScreenState extends State<TrustMeScreen> {
 
       if (mounted) {
         setState(() {
-          _myNodeUrl = fetchedUrl; // 🚀 Save the real URL to the state!
+          _myNodeUrl = fetchedUrl;
           _isNodeReady = true;
           _isGeneratingKeys = false;
         });
@@ -100,7 +97,7 @@ class _TrustMeScreenState extends State<TrustMeScreen> {
     }
   }
 
-  // --- 🚀 LIVE: GENERATE HANDSHAKE CODE ---
+  // --- LIVE: GENERATE HANDSHAKE CODE ---
   void _showGenerateCodeDialog() async {
     final navigator = Navigator.of(context);
     final scaffoldMessenger = ScaffoldMessenger.of(context);
@@ -124,7 +121,6 @@ class _TrustMeScreenState extends State<TrustMeScreen> {
         showDialog(
           context: context,
           barrierDismissible: false,
-          // 🚀 CHANGED: Pass your REAL URL into the invite dialog!
           builder: (context) =>
               _CountdownCodeDialog(result: result, myUrl: _myNodeUrl),
         );
@@ -137,7 +133,7 @@ class _TrustMeScreenState extends State<TrustMeScreen> {
     }
   }
 
-  // --- 🚀 LIVE: ENTER HANDSHAKE CODE & URL ---
+  // --- LIVE: ENTER HANDSHAKE CODE & URL ---
   void _showEnterCodeDialog() {
     final TextEditingController urlController = TextEditingController();
     final TextEditingController codeController = TextEditingController();
@@ -212,8 +208,7 @@ class _TrustMeScreenState extends State<TrustMeScreen> {
                   controller: urlController,
                   style: const TextStyle(color: Colors.white),
                   decoration: InputDecoration(
-                    hintText:
-                        "https://their-id-guptik.myqrmart.com", // Keeping this as a generic hint for the OTHER person's URL
+                    hintText: "https://their-id-guptik.myqrmart.com",
                     hintStyle: TextStyle(color: Colors.grey.shade600),
                     filled: true,
                     fillColor: Colors.black26,
@@ -298,7 +293,7 @@ class _TrustMeScreenState extends State<TrustMeScreen> {
                   await TrustMeService.instance.initiatePeerConnection(
                     peerUrl: peerUrl,
                     code: code,
-                    myUrl: _myNodeUrl, // 🚀 Use the real URL here too!
+                    myUrl: _myNodeUrl,
                   );
 
                   navigator.pop();
@@ -380,17 +375,17 @@ class _TrustMeScreenState extends State<TrustMeScreen> {
                   child: Text(
                     "TRUST ME",
                     style: TextStyle(
-                      color: Colors.white,
+                      color: Colors.cyanAccent,
                       fontSize: 20,
                       fontWeight: FontWeight.bold,
                       letterSpacing: 2,
                     ),
                   ),
                 ),
-                _buildNavItem(Icons.dashboard_outlined, "Node Dashboard", 0),
-                _buildNavItem(Icons.chat_bubble_outline, "Secure Chats", 1),
-                _buildNavItem(Icons.group_outlined, "Groups", 2),
-                _buildNavItem(Icons.help_outline, "Unknown Inbox", 3),
+                // Node Dashboard removed; Secure Chats is now Index 0
+                _buildNavItem(Icons.chat_bubble_outline, "Secure Chats", 0),
+                _buildNavItem(Icons.group_outlined, "Groups", 1),
+                _buildNavItem(Icons.help_outline, "Unknown Inbox", 2),
                 const Spacer(),
                 const Divider(color: Colors.white12, height: 1),
                 Padding(
@@ -477,195 +472,17 @@ class _TrustMeScreenState extends State<TrustMeScreen> {
   Widget _buildContentArea() {
     switch (_selectedIndex) {
       case 0:
-        return _buildNodeDashboard();
-      case 1:
         return const SecureChatsScreen();
-      case 2:
+      case 1:
         return _buildEmptyState(
           Icons.group_outlined,
           "No groups managed by this node.",
         );
-      case 3:
+      case 2:
         return _buildEmptyState(Icons.help_outline, "Unknown inbox is clear.");
       default:
         return const SizedBox.shrink();
     }
-  }
-
-  Widget _buildNodeDashboard() {
-    return Padding(
-      padding: const EdgeInsets.all(32.0),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text(
-            "Node Dashboard",
-            style: TextStyle(
-              color: Colors.white,
-              fontSize: 28,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-          const SizedBox(height: 8),
-          const Text(
-            "Manage your local P2P gateway and cryptographic identity.",
-            style: TextStyle(color: Colors.grey),
-          ),
-          const SizedBox(height: 32),
-
-          Container(
-            padding: const EdgeInsets.all(24),
-            decoration: BoxDecoration(
-              color: const Color(0xFF1E293B),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: Colors.white12),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Row(
-                  children: [
-                    Icon(Icons.router, color: Colors.cyanAccent),
-                    SizedBox(width: 12),
-                    Text(
-                      "Gateway Network Status",
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 24),
-                _buildStatusRow("Docker Gateway container", true),
-                _buildStatusRow("PostgreSQL Database", true),
-                _buildStatusRow("Cloudflare Tunnel", true),
-                const Divider(color: Colors.white12, height: 32),
-                const Text(
-                  "Permanent Node Address:",
-                  style: TextStyle(color: Colors.grey, fontSize: 12),
-                ),
-                const SizedBox(height: 8),
-                Row(
-                  children: [
-                    // 🚀 CHANGED: Display the REAL URL here!
-                    SelectableText(
-                      _myNodeUrl,
-                      style: const TextStyle(
-                        color: Colors.cyanAccent,
-                        fontFamily: 'monospace',
-                        fontSize: 16,
-                      ),
-                    ),
-                    const SizedBox(width: 16),
-                    IconButton(
-                      icon: const Icon(
-                        Icons.copy,
-                        color: Colors.grey,
-                        size: 18,
-                      ),
-                      tooltip: "Copy URL",
-                      onPressed: () async {
-                        final scaffoldMessenger = ScaffoldMessenger.of(context);
-
-                        // 🚀 CHANGED: Copy the REAL URL to the clipboard!
-                        await Clipboard.setData(
-                          ClipboardData(text: _myNodeUrl),
-                        );
-
-                        if (!mounted) {
-                          return;
-                        }
-                        scaffoldMessenger.showSnackBar(
-                          const SnackBar(
-                            content: Text("Node Address copied!"),
-                            backgroundColor: Colors.green,
-                            duration: Duration(seconds: 2),
-                          ),
-                        );
-                      },
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 24),
-          Container(
-            padding: const EdgeInsets.all(24),
-            decoration: BoxDecoration(
-              color: const Color(0xFF1E293B),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: Colors.white12),
-            ),
-            child: const Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Icon(Icons.security, color: Colors.greenAccent),
-                    SizedBox(width: 12),
-                    Text(
-                      "Cryptographic Identity",
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ],
-                ),
-                SizedBox(height: 24),
-                Text(
-                  "Ed25519 Identity Key: GENERATED",
-                  style: TextStyle(color: Colors.grey, fontFamily: 'monospace'),
-                ),
-                SizedBox(height: 8),
-                Text(
-                  "X25519 Signed Pre-Key: ACTIVE (Rotates in 29 days)",
-                  style: TextStyle(color: Colors.grey, fontFamily: 'monospace'),
-                ),
-                SizedBox(height: 8),
-                Text(
-                  "One-Time Pre-Keys Remaining: 100/100",
-                  style: TextStyle(color: Colors.grey, fontFamily: 'monospace'),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildStatusRow(String label, bool isOnline) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12.0),
-      child: Row(
-        children: [
-          Container(
-            width: 10,
-            height: 10,
-            decoration: BoxDecoration(
-              color: isOnline ? Colors.greenAccent : Colors.redAccent,
-              shape: BoxShape.circle,
-            ),
-          ),
-          const SizedBox(width: 12),
-          Text(label, style: const TextStyle(color: Colors.white70)),
-          const Spacer(),
-          Text(
-            isOnline ? "ONLINE" : "OFFLINE",
-            style: TextStyle(
-              color: isOnline ? Colors.greenAccent : Colors.redAccent,
-              fontWeight: FontWeight.bold,
-              fontSize: 12,
-            ),
-          ),
-        ],
-      ),
-    );
   }
 
   Widget _buildEmptyState(IconData icon, String text) {
