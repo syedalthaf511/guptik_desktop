@@ -54,7 +54,6 @@ class DockerService {
 
     final requiredDirs = [
       '$_vaultPath/data/postgres',
-      '$_vaultPath/data/ollama',
       '$_vaultPath/data/n8n',
       '$_vaultPath/data/osint',
       '$_vaultPath/vault_files',
@@ -103,7 +102,7 @@ services:
     command: sh -c "dart pub get && dart run server.dart"
     depends_on:
       - db
-      - ollama
+
     
 
   db:
@@ -118,13 +117,7 @@ services:
     volumes:
       - ./data/postgres:/var/lib/postgresql/data
 
-  ollama:
-    image: ollama/ollama:latest
-    restart: always
-    ports:
-      - "55434:11434"
-    volumes:
-      - ./data/ollama:/root/.ollama
+ 
 
   n8n:
     image: docker.n8n.io/n8nio/n8n
@@ -179,6 +172,12 @@ import 'package:http/http.dart' as http;
 import 'package:mime/mime.dart';
 import 'package:postgres/postgres.dart';
 import 'package:uuid/uuid.dart';
+
+// 🚀 Top-level global memory (Above main)
+String currentAiProvider = "OpenRouter";
+String currentAiEndpointUrl = "https://openrouter.ai/api/v1/chat/completions";
+String currentAiModelName = "meta-llama/llama-3-8b-instruct";
+String currentAiApiKey = "";
 
 void main() async {
   final router = Router();
@@ -447,24 +446,9 @@ void main() async {
     } catch (e) { return Response.internalServerError(body: 'Delete Error: $e'); }
   });
 
-  router.get('/api/tags', (Request req) async {
-    try {
-      final response = await http.get(Uri.parse('http://ollama:11434/api/tags'));
-      return Response.ok(response.body, headers: {'Content-Type': 'application/json'});
-    } catch (e) { return Response.internalServerError(body: 'AI Offline'); }
-  });
-
-  router.post('/api/chat', (Request req) async {
-    try {
-      final payload = await req.readAsString();
-      final client = http.Client();
-      final proxyReq = http.Request('POST', Uri.parse('http://ollama:11434/api/chat'));
-      proxyReq.headers['Content-Type'] = 'application/json';
-      proxyReq.body = payload;
-      final response = await client.send(proxyReq);
-      return Response.ok(response.stream, headers: {'Content-Type': 'application/json'});
-    } catch (e) { return Response.internalServerError(body: 'AI Offline'); }
-  });
+// =================================================================
+//     guptik Ai
+// =================================================================
 
   router.get('/api/sessions', (Request req) async {
     try {
@@ -545,6 +529,98 @@ void main() async {
       return Response.internalServerError(body: 'DB Error: $e');
     }
   });
+
+ // 🚀 GET: Mobile app fetches current desktop settings from Postgres
+  router.get('/api/ai-config', (Request req) async {
+    try {
+      final connection = await Connection.open(
+        Endpoint(host: 'db', port: 5432, database: 'postgres', username: 'postgres', password: 'GuptikSystemPassword2026'),
+        settings: const ConnectionSettings(sslMode: SslMode.disable),
+      );
+
+      await connection.execute(
+        "CREATE TABLE IF NOT EXISTS system_ai_config (key TEXT PRIMARY KEY, value TEXT)"
+      );
+
+      final result = await connection.execute("SELECT key, value FROM system_ai_config");
+      await connection.close();
+
+      Map<String, String> dbConfig = {};
+      for (var row in result) {
+        dbConfig[row[0].toString()] = row[1].toString();
+      }
+
+      final liveConfig = {
+        "provider": (dbConfig['provider']?.isNotEmpty == true) ? dbConfig['provider'] : currentAiProvider,
+        "endpoint_url": (dbConfig['endpoint_url']?.isNotEmpty == true) ? dbConfig['endpoint_url'] : currentAiEndpointUrl,
+        "model_name": (dbConfig['model_name']?.isNotEmpty == true) ? dbConfig['model_name'] : currentAiModelName,
+        "api_key": (dbConfig['api_key']?.isNotEmpty == true) ? dbConfig['api_key'] : currentAiApiKey,
+      };
+
+      return Response.ok(
+        jsonEncode(liveConfig),
+        headers: {'Content-Type': 'application/json'},
+      );
+    } catch (e) {
+      return Response.internalServerError(body: 'Error fetching config: $e');
+    }
+  });
+
+  // 🚀 POST: Save desktop or mobile settings into Postgres Database
+  router.post('/api/ai-config', (Request req) async {
+    try {
+      final payload = await req.readAsString();
+      final data = jsonDecode(payload);
+
+      final connection = await Connection.open(
+        Endpoint(host: 'db', port: 5432, database: 'postgres', username: 'postgres', password: 'GuptikSystemPassword2026'),
+        settings: const ConnectionSettings(sslMode: SslMode.disable),
+      );
+
+      await connection.execute(
+        "CREATE TABLE IF NOT EXISTS system_ai_config (key TEXT PRIMARY KEY, value TEXT)"
+      );
+
+      if (data['provider'] != null && data['provider'].toString().isNotEmpty) {
+        currentAiProvider = data['provider'];
+        await connection.execute(
+          Sql.named("INSERT INTO system_ai_config (key, value) VALUES ('provider', @val) ON CONFLICT (key) DO UPDATE SET value = @val"),
+          parameters: {'val': data['provider']},
+        );
+      }
+      if (data['endpoint_url'] != null && data['endpoint_url'].toString().isNotEmpty) {
+        currentAiEndpointUrl = data['endpoint_url'];
+        await connection.execute(
+          Sql.named("INSERT INTO system_ai_config (key, value) VALUES ('endpoint_url', @val) ON CONFLICT (key) DO UPDATE SET value = @val"),
+          parameters: {'val': data['endpoint_url']},
+        );
+      }
+      if (data['model_name'] != null && data['model_name'].toString().isNotEmpty) {
+        currentAiModelName = data['model_name'];
+        await connection.execute(
+          Sql.named("INSERT INTO system_ai_config (key, value) VALUES ('model_name', @val) ON CONFLICT (key) DO UPDATE SET value = @val"),
+          parameters: {'val': data['model_name']},
+        );
+      }
+      if (data['api_key'] != null && data['api_key'].toString().isNotEmpty) {
+        currentAiApiKey = data['api_key'];
+        await connection.execute(
+          Sql.named("INSERT INTO system_ai_config (key, value) VALUES ('api_key', @val) ON CONFLICT (key) DO UPDATE SET value = @val"),
+          parameters: {'val': data['api_key']},
+        );
+      }
+
+      await connection.close();
+
+      return Response.ok(
+        jsonEncode({'status': 'updated'}),
+        headers: {'Content-Type': 'application/json'},
+      );
+    } catch (e) {
+      return Response.internalServerError(body: 'Error updating config: $e');
+    }
+  });
+
 
   router.post('/trustme/handshake/initiate', (Request req) async {
     try {

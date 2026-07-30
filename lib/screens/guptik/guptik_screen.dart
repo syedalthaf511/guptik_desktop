@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'dart:convert';
+import 'package:http/http.dart' as http;
 import 'n8n_webview_screen.dart';
 import 'package:uuid/uuid.dart';
 import '../../services/external/postgres_service.dart';
-import '../../services/external/ollama_service.dart';
 
 class GuptikScreen extends StatefulWidget {
   const GuptikScreen({super.key});
@@ -17,38 +19,68 @@ class _GuptikScreenState extends State<GuptikScreen> {
   
   // State
   String _sessionId = const Uuid().v4();
-  List<Map<String, String>> _messages = []; // Local state for UI
-  List<Map<String, dynamic>> _sessions = []; // History sidebar
-  String? _currentModel;
-  List<String> _availableModels = [];
+  List<Map<String, String>> _messages = [];
+  List<Map<String, dynamic>> _sessions = [];
   bool _isGenerating = false;
+
+  // 🚀 Cline-Style Multi-Provider Configuration State
+  String _aiProvider = "OpenRouter"; 
+  String _aiEndpointUrl = "https://openrouter.ai/api/v1/chat/completions";
+  String _aiApiKey = "";
+  String _aiModelName = "meta-llama/llama-3-8b-instruct";
+  
+  List<Map<String, String>> _cachedModels = [];
+  bool _isFetchingModels = false;
 
   @override
   void initState() {
     super.initState();
     _loadSessions();
-    _loadModels();
+    _loadAiSettings(); 
   }
 
-  // 🚀 FIX 1: Smarter model loading so it doesn't overwrite your current selection!
-  Future<void> _loadModels() async {
-    final models = await OllamaService().getLocalModels();
-    // Ensure we have absolutely no duplicates to prevent dropdown crashes
-    final uniqueModels = models.toSet().toList(); 
+  Future<void> _loadAiSettings() async {
+    final prefs = await SharedPreferences.getInstance();
+    setState(() {
+      _aiProvider = prefs.getString('ai_provider') ?? "OpenRouter";
+      _aiEndpointUrl = prefs.getString('ai_endpoint_url') ?? "https://openrouter.ai/api/v1/chat/completions";
+      _aiApiKey = prefs.getString('ai_api_key') ?? "";
+      _aiModelName = prefs.getString('ai_model_name') ?? "meta-llama/llama-3-8b-instruct";
+    });
+  }
 
-    if (mounted) {
-      setState(() {
-        _availableModels = uniqueModels;
-        
-        // Only select the first model IF we don't have one selected,
-        // or if the one we had selected was deleted.
-        if (_currentModel == null || !uniqueModels.contains(_currentModel)) {
-          _currentModel = uniqueModels.isNotEmpty ? uniqueModels.first : null;
-        }
-      });
+ Future<void> _saveAiSettings(String provider, String url, String key, String model) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('ai_provider', provider);
+    await prefs.setString('ai_endpoint_url', url);
+    await prefs.setString('ai_api_key', key);
+    await prefs.setString('ai_model_name', model);
+
+    setState(() {
+      _aiProvider = provider;
+      _aiEndpointUrl = url;
+      _aiApiKey = key;
+      _aiModelName = model;
+    });
+
+    // 🚀 Notify local gateway server of the new configuration
+    try {
+      await http.post(
+        Uri.parse("http://localhost:5000/api/ai-config"), // Adjust port to your gateway port
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'provider': provider,
+          'endpoint_url': url,
+          'api_key': key,
+          'model_name': model,
+        }),
+      );
+    } catch (e) {
+      debugPrint("Gateway sync warning: $e");
     }
   }
 
+  
   Future<void> _loadSessions() async {
     final sessions = await PostgresService().getChatSessions();
     if (mounted) setState(() => _sessions = sessions);
@@ -73,13 +105,13 @@ class _GuptikScreenState extends State<GuptikScreen> {
     });
   }
 
+  // 🚀 Universal AI Calling Logic supporting provider-specific headers
   Future<void> _sendMessage() async {
-    if (_inputController.text.trim().isEmpty || _currentModel == null) return;
+    if (_inputController.text.trim().isEmpty) return;
 
     final userText = _inputController.text.trim();
     _inputController.clear();
 
-    // 1. Add User Message to UI & DB
     setState(() {
       _messages.add({'role': 'user', 'content': userText});
       _isGenerating = true;
@@ -87,48 +119,90 @@ class _GuptikScreenState extends State<GuptikScreen> {
     _scrollToBottom();
 
     await PostgresService().saveChatMessage(
-      sessionId: _sessionId,
-      role: 'user',
-      content: userText,
-      model: _currentModel!,
+      sessionId: _sessionId, role: 'user', content: userText, model: _aiModelName,
     );
 
-    // 2. Prepare for AI Response
-    String fullResponse = "";
     setState(() {
-      _messages.add({'role': 'assistant', 'content': '...'}); // Placeholder
+      _messages.add({'role': 'assistant', 'content': 'Waiting for AI response...'});
     });
 
-    // 3. Stream Response
     try {
       final historyForAi = _messages
           .sublist(0, _messages.length - 1) 
           .map((m) => {'role': m['role']!, 'content': m['content']!})
           .toList();
 
-      await for (final chunk in OllamaService().generateChatStream(
-        model: _currentModel!,
-        history: historyForAi,
-      )) {
-        fullResponse += chunk;
-        setState(() {
-          _messages.last['content'] = fullResponse;
-        });
-        _scrollToBottom();
+      final requestBody = jsonEncode({
+        "model": _aiModelName,
+        "messages": historyForAi,
+        "stream": false 
+      });
+
+      String safeUrl = _aiEndpointUrl.trim();
+      if (safeUrl.startsWith("http://") && (safeUrl.contains("openrouter") || safeUrl.contains("openai"))) {
+        safeUrl = safeUrl.replaceFirst("http://", "https://");
       }
 
-      // 4. Save AI Response to DB
-      await PostgresService().saveChatMessage(
-        sessionId: _sessionId,
-        role: 'assistant',
-        content: fullResponse,
-        model: _currentModel!,
+      String safeKey = _aiApiKey.replaceAll('\n', '').replaceAll('\r', '').replaceAll(' ', '').trim();
+      if (safeKey.toLowerCase().startsWith('bearer')) {
+        safeKey = safeKey.substring(6).trim();
+      }
+
+      final Map<String, String> headers = {
+        "Content-Type": "application/json",
+      };
+
+      // Provider-specific headers
+      if (_aiProvider == "OpenRouter") {
+        headers["HTTP-Referer"] = "https://guptik.com";
+        headers["X-Title"] = "Guptik Desktop";
+      }
+
+      if (safeKey.isNotEmpty) {
+        if (_aiProvider == "Anthropic") {
+          headers["x-api-key"] = safeKey;
+          headers["anthropic-version"] = "2023-06-01";
+        } else {
+          headers["Authorization"] = "Bearer $safeKey";
+        }
+      }
+
+      final response = await http.post(
+        Uri.parse(safeUrl),
+        headers: headers,
+        body: requestBody,
       );
 
+      String aiResponseText = "";
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        if (data['choices'] != null && data['choices'].isNotEmpty) {
+          aiResponseText = data['choices'][0]['message']['content'];
+        } else if (data['content'] != null && data['content'] is List) {
+          // Anthropic format fallback
+          aiResponseText = data['content'][0]['text'] ?? "";
+        } else if (data['message'] != null && data['message']['content'] != null) {
+          aiResponseText = data['message']['content'];
+        } else {
+          aiResponseText = "Response format not recognized.";
+        }
+      } else {
+        aiResponseText = "[API Error: ${response.statusCode}] - ${response.body}";
+      }
+
+      setState(() {
+        _messages.last['content'] = aiResponseText;
+      });
+      _scrollToBottom();
+
+      await PostgresService().saveChatMessage(
+        sessionId: _sessionId, role: 'assistant', content: aiResponseText, model: _aiModelName,
+      );
       _loadSessions();
 
     } catch (e) {
-      setState(() => _messages.last['content'] = "[Error: $e]");
+      setState(() => _messages.last['content'] = "[Network Error: Check your AI Settings URL]\n$e");
     } finally {
       setState(() => _isGenerating = false);
     }
@@ -146,111 +220,264 @@ class _GuptikScreenState extends State<GuptikScreen> {
     });
   }
 
-  void _showPullModelDialog() {
-    final TextEditingController modelNameController = TextEditingController();
-    bool isPulling = false;
-    String pullStatus = '';
+  // 🚀 Cline-Style Multi-Provider Settings Dialog
+  void _showAiSettingsDialog() {
+    String tempProvider = _aiProvider;
+    String tempUrl = _aiEndpointUrl;
+    String tempKey = _aiApiKey;
+    String tempModel = _aiModelName;
+    String fetchStatus = "";
 
     showDialog(
       context: context,
-      barrierDismissible: false, 
-      builder: (dialogCtx) {
-        return StatefulBuilder(
-          builder: (context, setDialogState) {
-            return AlertDialog(
-              backgroundColor: const Color(0xFF1E293B),
-              title: const Row(
-                children: [
-                  Icon(Icons.cloud_download, color: Colors.cyanAccent),
-                  SizedBox(width: 10),
-                  Text("Pull New AI Model", style: TextStyle(color: Colors.white, fontSize: 18)),
-                ],
-              ),
-              content: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text("Enter an Ollama model tag (e.g., 'phi3', 'mistral', 'llama3:8b')", style: TextStyle(color: Colors.grey, fontSize: 13)),
-                  const SizedBox(height: 12),
-                  TextField(
-                    controller: modelNameController,
-                    enabled: !isPulling, 
-                    style: const TextStyle(color: Colors.white),
-                    decoration: InputDecoration(
-                      filled: true,
-                      fillColor: Colors.black26,
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide.none),
-                      hintText: "Model name...",
-                      hintStyle: TextStyle(color: Colors.grey.shade600),
-                    ),
-                  ),
-                  if (pullStatus.isNotEmpty) ...[
-                    const SizedBox(height: 16),
-                    Text(pullStatus, style: TextStyle(
-                      color: pullStatus.startsWith("Error") ? Colors.redAccent : Colors.cyanAccent, 
-                      fontWeight: FontWeight.bold,
-                      fontSize: 12,
-                    )),
-                    if (isPulling)
-                      const Padding(
-                        padding: EdgeInsets.only(top: 8.0),
-                        child: LinearProgressIndicator(color: Colors.cyanAccent, backgroundColor: Colors.black26),
-                      ),
-                  ]
-                ],
-              ),
-              actions: [
-                if (!isPulling)
-                  TextButton(
-                    onPressed: () => Navigator.pop(dialogCtx),
-                    child: const Text("Cancel", style: TextStyle(color: Colors.grey)),
-                  ),
-                ElevatedButton(
-                  style: ElevatedButton.styleFrom(backgroundColor: Colors.cyanAccent),
-                  onPressed: isPulling ? null : () async {
-                    final modelName = modelNameController.text.trim().toLowerCase();
-                    if (modelName.isEmpty) return;
+      barrierDismissible: false,
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setDialogState) {
 
-                    setDialogState(() {
-                      isPulling = true;
-                      pullStatus = "Connecting to Ollama...";
+          // Handle default endpoints automatically when user switches providers
+          void onProviderChanged(String? newProvider) {
+            if (newProvider == null) return;
+            setDialogState(() {
+              tempProvider = newProvider;
+              _cachedModels = [];
+              switch (newProvider) {
+                case "OpenAI":
+                  tempUrl = "https://api.openai.com/v1/chat/completions";
+                  tempModel = "gpt-4o";
+                  break;
+                case "OpenRouter":
+                  tempUrl = "https://openrouter.ai/api/v1/chat/completions";
+                  tempModel = "meta-llama/llama-3-8b-instruct";
+                  break;
+                case "Anthropic":
+                  tempUrl = "https://api.anthropic.com/v1/messages";
+                  tempModel = "claude-3-5-sonnet-20241022";
+                  break;
+                case "Gemini":
+                  tempUrl = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions";
+                  tempModel = "gemini-1.5-flash";
+                  break;
+                case "DeepSeek":
+                  tempUrl = "https://api.deepseek.com/chat/completions";
+                  tempModel = "deepseek-chat";
+                  break;
+                case "Ollama":
+                  tempUrl = "http://localhost:11434/api/chat";
+                  tempModel = "llama3";
+                  break;
+                case "LM Studio":
+                  tempUrl = "http://localhost:1234/v1/chat/completions";
+                  tempModel = "local-model";
+                  break;
+                case "Hugging Face":
+                  tempUrl = "https://api-inference.huggingface.co/v1/chat/completions";
+                  tempModel = "mistralai/Mistral-7B-Instruct-v0.2";
+                  break;
+              }
+            });
+          }
+
+          // Fetch models dynamically for OpenRouter
+          Future<void> fetchModels() async {
+            if (tempProvider == "OpenRouter") {
+              if (tempKey.isEmpty) {
+                setDialogState(() => fetchStatus = "Please enter an API Key first.");
+                return;
+              }
+              setDialogState(() {
+                _isFetchingModels = true;
+                fetchStatus = "Fetching OpenRouter models...";
+              });
+
+              try {
+                final res = await http.get(
+                  Uri.parse("https://openrouter.ai/api/v1/models"),
+                  headers: {"Authorization": "Bearer ${tempKey.trim()}"},
+                );
+
+                if (res.statusCode == 200) {
+                  final data = jsonDecode(res.body);
+                  final List<dynamic> modelsList = data['data'];
+                  List<Map<String, String>> parsed = [];
+                  for (var m in modelsList) {
+                    parsed.add({
+                      "id": m["id"].toString(),
+                      "name": m["name"].toString()
                     });
-
-                    await for (String status in OllamaService().pullModel(modelName)) {
-                      setDialogState(() => pullStatus = status);
-                      
-                      if (status == "Success") {
-                        // Reload the fresh list from Ollama
-                        await _loadModels();
-                        
-                        // 🚀 FIX 2: Safely check if Ollama appended ':latest' to the name you typed!
-                        setState(() {
-                          if (_availableModels.contains(modelName)) {
-                            _currentModel = modelName;
-                          } else if (_availableModels.contains('$modelName:latest')) {
-                            _currentModel = '$modelName:latest';
-                          } else if (_availableModels.isNotEmpty) {
-                            _currentModel = _availableModels.first; // Fallback to safe known model
-                          }
-                        });
-                        
-                        if (dialogCtx.mounted) {
-                          Navigator.pop(dialogCtx);
-                        }
-                        break;
-                      } else if (status.startsWith("Error")) {
-                        setDialogState(() => isPulling = false);
-                        break;
-                      }
+                  }
+                  parsed.sort((a, b) => a["name"]!.toLowerCase().compareTo(b["name"]!.toLowerCase()));
+                  
+                  setDialogState(() {
+                    _cachedModels = parsed;
+                    _isFetchingModels = false;
+                    fetchStatus = "Loaded ${parsed.length} models successfully!";
+                    if (!_cachedModels.any((m) => m['id'] == tempModel) && parsed.isNotEmpty) {
+                      tempModel = parsed.first['id']!;
                     }
-                  },
-                  child: Text(isPulling ? "Downloading..." : "Pull Model", style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+                  });
+                } else {
+                  setDialogState(() {
+                    _isFetchingModels = false;
+                    fetchStatus = "Error: ${res.statusCode} (Invalid Key?)";
+                  });
+                }
+              } catch (_) {
+                setDialogState(() {
+                  _isFetchingModels = false;
+                  fetchStatus = "Connection error while fetching models.";
+                });
+              }
+            }
+          }
+
+          return AlertDialog(
+            backgroundColor: const Color(0xFF1E293B),
+            title: const Text("Cline-Style AI Provider Settings", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+            content: SizedBox(
+              width: 500,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // 1. SEPARATE PROVIDER DROPDOWN
+                    const Text("API Provider", style: TextStyle(color: Colors.grey, fontSize: 12)),
+                    const SizedBox(height: 5),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      decoration: BoxDecoration(color: Colors.black26, borderRadius: BorderRadius.circular(8)),
+                      child: DropdownButtonHideUnderline(
+                        child: DropdownButton<String>(
+                          value: tempProvider,
+                          isExpanded: true,
+                          dropdownColor: const Color(0xFF0F172A),
+                          style: const TextStyle(color: Colors.cyanAccent, fontWeight: FontWeight.bold),
+                          items: const [
+                            DropdownMenuItem(value: "OpenAI", child: Text("OpenAI")),
+                            DropdownMenuItem(value: "OpenRouter", child: Text("OpenRouter")),
+                            DropdownMenuItem(value: "Anthropic", child: Text("Anthropic (Claude)")),
+                            DropdownMenuItem(value: "Gemini", child: Text("Google Gemini")),
+                            DropdownMenuItem(value: "DeepSeek", child: Text("DeepSeek")),
+                            DropdownMenuItem(value: "Ollama", child: Text("Ollama (Local)")),
+                            DropdownMenuItem(value: "LM Studio", child: Text("LM Studio (Local)")),
+                            DropdownMenuItem(value: "Hugging Face", child: Text("Hugging Face")),
+                          ],
+                          onChanged: onProviderChanged,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+
+                    // 2. API KEY
+                    const Text("API Key", style: TextStyle(color: Colors.grey, fontSize: 12)),
+                    const SizedBox(height: 5),
+                    TextField(
+                      controller: TextEditingController(text: tempKey)..selection = TextSelection.collapsed(offset: tempKey.length),
+                      onChanged: (val) => tempKey = val,
+                      obscureText: true,
+                      style: const TextStyle(color: Colors.white),
+                      decoration: InputDecoration(
+                        hintText: tempProvider.contains("Local") || tempProvider == "Ollama" ? "Not required" : "Enter API key...",
+                        hintStyle: const TextStyle(color: Colors.white24),
+                        filled: true,
+                        fillColor: Colors.black26,
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide.none),
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+
+                    // 3. BASE URL (Editable)
+                    const Text("API Base URL", style: TextStyle(color: Colors.grey, fontSize: 12)),
+                    const SizedBox(height: 5),
+                    TextField(
+                      controller: TextEditingController(text: tempUrl)..selection = TextSelection.collapsed(offset: tempUrl.length),
+                      onChanged: (val) => tempUrl = val,
+                      style: const TextStyle(color: Colors.white),
+                      decoration: InputDecoration(
+                        filled: true,
+                        fillColor: Colors.black26,
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide.none),
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+
+                    // 4. MODEL SELECTION
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text("Model Selection", style: TextStyle(color: Colors.grey, fontSize: 12)),
+                        if (tempProvider == "OpenRouter")
+                          TextButton.icon(
+                            onPressed: _isFetchingModels ? null : fetchModels,
+                            icon: _isFetchingModels 
+                              ? const SizedBox(width: 12, height: 12, child: CircularProgressIndicator(color: Colors.cyanAccent, strokeWidth: 2))
+                              : const Icon(Icons.cloud_download, color: Colors.cyanAccent, size: 16),
+                            label: const Text("Fetch Models", style: TextStyle(color: Colors.cyanAccent, fontSize: 12)),
+                          )
+                      ],
+                    ),
+                    const SizedBox(height: 5),
+                    
+                    if (tempProvider == "OpenRouter" && _cachedModels.isNotEmpty)
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 12),
+                        decoration: BoxDecoration(color: Colors.black26, borderRadius: BorderRadius.circular(8)),
+                        child: DropdownButtonHideUnderline(
+                          child: DropdownButton<String>(
+                            value: _cachedModels.any((m) => m['id'] == tempModel) ? tempModel : null,
+                            isExpanded: true,
+                            menuMaxHeight: 400,
+                            dropdownColor: const Color(0xFF0F172A),
+                            hint: Text(tempModel.isEmpty ? "Select model..." : tempModel, style: const TextStyle(color: Colors.white70)),
+                            items: _cachedModels.map((m) {
+                              return DropdownMenuItem<String>(
+                                value: m['id'],
+                                child: Text("${m['name']} (${m['id']})", style: const TextStyle(color: Colors.cyanAccent, fontSize: 13), overflow: TextOverflow.ellipsis),
+                              );
+                            }).toList(),
+                            onChanged: (val) {
+                              if (val != null) setDialogState(() => tempModel = val);
+                            },
+                          ),
+                        ),
+                      )
+                    else
+                      TextField(
+                        controller: TextEditingController(text: tempModel)..selection = TextSelection.collapsed(offset: tempModel.length),
+                        onChanged: (val) => tempModel = val,
+                        style: const TextStyle(color: Colors.white),
+                        decoration: InputDecoration(
+                          hintText: "Enter model ID (e.g. gpt-4o, claude-3-5-sonnet)",
+                          hintStyle: const TextStyle(color: Colors.white24),
+                          filled: true,
+                          fillColor: Colors.black26,
+                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide.none),
+                        ),
+                      ),
+
+                    if (fetchStatus.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 10),
+                        child: Text(fetchStatus, style: TextStyle(color: fetchStatus.contains("Error") ? Colors.redAccent : Colors.greenAccent, fontSize: 12)),
+                      )
+                  ],
                 ),
-              ],
-            );
-          },
-        );
-      },
+              ),
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("Cancel", style: TextStyle(color: Colors.grey))),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(backgroundColor: Colors.cyanAccent),
+                onPressed: () {
+                  _saveAiSettings(tempProvider, tempUrl, tempKey, tempModel);
+                  Navigator.pop(ctx);
+                },
+                child: const Text("Save Configuration", style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+              ),
+            ],
+          );
+        }
+      ),
     );
   }
 
@@ -271,21 +498,13 @@ class _GuptikScreenState extends State<GuptikScreen> {
                   height: 48,
                   child: ElevatedButton.icon(
                     onPressed: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(builder: (context) => const N8nWebviewScreen()),
-                      );
+                      Navigator.push(context, MaterialPageRoute(builder: (context) => const N8nWebviewScreen()));
                     },
                     icon: const Icon(Icons.work, color: Color(0xFF205CE9)),
-                    label: const Text(
-                      "Automations",
-                      style: TextStyle(color: Color(0xFF0F172A), fontWeight: FontWeight.bold),
-                    ),
+                    label: const Text("Automations", style: TextStyle(color: Color(0xFF0F172A), fontWeight: FontWeight.bold)),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: Colors.cyanAccent,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8),
-                      ),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                     ),
                   ),
                 ),
@@ -338,39 +557,25 @@ class _GuptikScreenState extends State<GuptikScreen> {
                   children: [
                     const Text("GUPTIK NEURAL", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
                     
-                    DropdownButton<String>(
-                      value: _currentModel,
-                      dropdownColor: const Color(0xFF1E293B),
-                      underline: Container(),
-                      icon: const Icon(Icons.arrow_drop_down, color: Colors.cyanAccent),
-                      style: const TextStyle(color: Colors.cyanAccent, fontFamily: 'Courier'),
-                      
-                      hint: const Text("Select a Model", style: TextStyle(color: Colors.cyanAccent)),
-                      
-                      items: [
-                        ..._availableModels.map((m) => DropdownMenuItem<String>(
-                          value: m, 
-                          child: Text(m)
-                        )),
-                        
-                        const DropdownMenuItem<String>(
-                          value: '---pull_new---',
-                          child: Row(
-                            children: [
-                              Icon(Icons.download, color: Colors.greenAccent, size: 16),
-                              SizedBox(width: 8),
-                              Text("Add New Model", style: TextStyle(color: Colors.greenAccent)),
-                            ],
-                          ),
+                    Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                          decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(4)),
+                          child: Text(_aiProvider, style: const TextStyle(color: Colors.white70, fontSize: 10, fontWeight: FontWeight.bold)),
+                        ),
+                        const SizedBox(width: 10),
+                        SizedBox(
+                          width: 200,
+                          child: Text(_aiModelName, overflow: TextOverflow.ellipsis, textAlign: TextAlign.right, style: const TextStyle(color: Colors.cyanAccent, fontFamily: 'Courier', fontSize: 12)),
+                        ),
+                        const SizedBox(width: 10),
+                        IconButton(
+                          icon: const Icon(Icons.settings, color: Colors.cyanAccent),
+                          tooltip: "Configure AI Provider",
+                          onPressed: _showAiSettingsDialog,
                         ),
                       ],
-                      onChanged: (val) {
-                        if (val == '---pull_new---') {
-                          _showPullModelDialog();
-                        } else {
-                          setState(() => _currentModel = val);
-                        }
-                      },
                     ),
                   ],
                 ),
@@ -379,7 +584,7 @@ class _GuptikScreenState extends State<GuptikScreen> {
               // Messages
               Expanded(
                 child: _messages.isEmpty 
-                  ? Center(child: Text("Start a conversation with local AI", style: TextStyle(color: Colors.grey[700])))
+                  ? Center(child: Text("Configure your API settings and start a chat.", style: TextStyle(color: Colors.grey[700])))
                   : ListView.builder(
                       controller: _scrollController,
                       padding: const EdgeInsets.all(20),

@@ -1304,7 +1304,7 @@ class PostgresService {
   }
 
   // ==============================================================================
-  // SECTION 4: OLLAMA AI METHODS
+  // SECTION 4: AI NEURAL MEMORY & CONFIG METHODS (Multi-Provider Compatible)
   // ==============================================================================
 
   Future<void> saveChatMessage({
@@ -1315,10 +1315,11 @@ class PostgresService {
   }) async {
     if (!_isConnected) return;
     final safeContent = content.replaceAll("'", "''");
+    final safeModel = model.replaceAll("'", "''");
 
     await _connection!.execute('''
       INSERT INTO ollama_chat_memory (session_id, role, content, model_used)
-      VALUES ('$sessionId', '$role', '$safeContent', '$model')
+      VALUES ('$sessionId', '$role', '$safeContent', '$safeModel')
     ''');
   }
 
@@ -1369,7 +1370,7 @@ class PostgresService {
     return sessions;
   }
 
-  Future<void> initOllamaTableUpdates() async {
+  Future<void> initAiTableUpdates() async {
     if (!_isConnected) return;
     try {
       await _connection!.execute(
@@ -1378,12 +1379,13 @@ class PostgresService {
     } catch (_) {}
   }
 
-  Future<void> saveOllamaModel(String modelTag) async {
+  Future<void> saveAiModel(String modelTag) async {
     if (!_isConnected) return;
-    await initOllamaTableUpdates();
+    await initAiTableUpdates();
+    final safeTag = modelTag.replaceAll("'", "''");
     await _connection!.execute('''
       INSERT INTO ollama_models (model_tag, is_active)
-      VALUES ('$modelTag', TRUE)
+      VALUES ('$safeTag', TRUE)
       ON CONFLICT (model_tag) DO NOTHING;
     ''');
   }
@@ -1391,21 +1393,23 @@ class PostgresService {
   Future<void> updateModelPrompt(String modelTag, String prompt) async {
     if (!_isConnected) return;
     final safePrompt = prompt.replaceAll("'", "''");
+    final safeTag = modelTag.replaceAll("'", "''");
     await _connection!.execute('''
-      UPDATE ollama_models SET system_prompt = '$safePrompt' WHERE model_tag = '$modelTag'
+      UPDATE ollama_models SET system_prompt = '$safePrompt' WHERE model_tag = '$safeTag'
     ''');
   }
 
-  Future<void> deleteOllamaModelDb(String modelTag) async {
+  Future<void> deleteAiModelDb(String modelTag) async {
     if (!_isConnected) return;
+    final safeTag = modelTag.replaceAll("'", "''");
     await _connection!.execute(
-      "DELETE FROM ollama_models WHERE model_tag = '$modelTag'",
+      "DELETE FROM ollama_models WHERE model_tag = '$safeTag'",
     );
   }
 
   Future<List<Map<String, dynamic>>> getSavedModels() async {
     if (!_isConnected) return [];
-    await initOllamaTableUpdates();
+    await initAiTableUpdates();
     final result = await _connection!.execute(
       'SELECT model_tag, system_prompt FROM ollama_models',
     );
