@@ -39,17 +39,27 @@ class _GuptikScreenState extends State<GuptikScreen> {
     _loadAiSettings(); 
   }
 
+  // 🚀 LOAD & SYNC AI SETTINGS ON DESKTOP LAUNCH
   Future<void> _loadAiSettings() async {
     final prefs = await SharedPreferences.getInstance();
+    final p = prefs.getString('ai_provider') ?? "OpenRouter";
+    final u = prefs.getString('ai_endpoint_url') ?? "https://openrouter.ai/api/v1/chat/completions";
+    final k = prefs.getString('ai_api_key') ?? "";
+    final m = prefs.getString('ai_model_name') ?? "meta-llama/llama-3-8b-instruct";
+
     setState(() {
-      _aiProvider = prefs.getString('ai_provider') ?? "OpenRouter";
-      _aiEndpointUrl = prefs.getString('ai_endpoint_url') ?? "https://openrouter.ai/api/v1/chat/completions";
-      _aiApiKey = prefs.getString('ai_api_key') ?? "";
-      _aiModelName = prefs.getString('ai_model_name') ?? "meta-llama/llama-3-8b-instruct";
+      _aiProvider = p;
+      _aiEndpointUrl = u;
+      _aiApiKey = k;
+      _aiModelName = m;
     });
+
+    // 🚀 Auto-push to Gateway Server (Port 55000) on startup
+    _pushConfigToGateway(p, u, k, m);
   }
 
- Future<void> _saveAiSettings(String provider, String url, String key, String model) async {
+  // 🚀 SAVE SETTINGS LOCALLY & PUSH TO GATEWAY
+  Future<void> _saveAiSettings(String provider, String url, String key, String model) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('ai_provider', provider);
     await prefs.setString('ai_endpoint_url', url);
@@ -63,10 +73,14 @@ class _GuptikScreenState extends State<GuptikScreen> {
       _aiModelName = model;
     });
 
-    // 🚀 Notify local gateway server of the new configuration
+    await _pushConfigToGateway(provider, url, key, model);
+  }
+
+  // 🚀 HELPER: PUSH CONFIG TO GATEWAY (PORT 55000)
+  Future<void> _pushConfigToGateway(String provider, String url, String key, String model) async {
     try {
       await http.post(
-        Uri.parse("http://localhost:5000/api/ai-config"), // Adjust port to your gateway port
+        Uri.parse("http://localhost:55000/api/ai-config"), // FIXED: Port updated to 55000
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({
           'provider': provider,
@@ -80,7 +94,6 @@ class _GuptikScreenState extends State<GuptikScreen> {
     }
   }
 
-  
   Future<void> _loadSessions() async {
     final sessions = await PostgresService().getChatSessions();
     if (mounted) setState(() => _sessions = sessions);
@@ -152,7 +165,6 @@ class _GuptikScreenState extends State<GuptikScreen> {
         "Content-Type": "application/json",
       };
 
-      // Provider-specific headers
       if (_aiProvider == "OpenRouter") {
         headers["HTTP-Referer"] = "https://guptik.com";
         headers["X-Title"] = "Guptik Desktop";
@@ -180,7 +192,6 @@ class _GuptikScreenState extends State<GuptikScreen> {
         if (data['choices'] != null && data['choices'].isNotEmpty) {
           aiResponseText = data['choices'][0]['message']['content'];
         } else if (data['content'] != null && data['content'] is List) {
-          // Anthropic format fallback
           aiResponseText = data['content'][0]['text'] ?? "";
         } else if (data['message'] != null && data['message']['content'] != null) {
           aiResponseText = data['message']['content'];
@@ -220,7 +231,6 @@ class _GuptikScreenState extends State<GuptikScreen> {
     });
   }
 
-  // 🚀 Cline-Style Multi-Provider Settings Dialog
   void _showAiSettingsDialog() {
     String tempProvider = _aiProvider;
     String tempUrl = _aiEndpointUrl;
@@ -234,7 +244,6 @@ class _GuptikScreenState extends State<GuptikScreen> {
       builder: (ctx) => StatefulBuilder(
         builder: (context, setDialogState) {
 
-          // Handle default endpoints automatically when user switches providers
           void onProviderChanged(String? newProvider) {
             if (newProvider == null) return;
             setDialogState(() {
@@ -277,7 +286,6 @@ class _GuptikScreenState extends State<GuptikScreen> {
             });
           }
 
-          // Fetch models dynamically for OpenRouter
           Future<void> fetchModels() async {
             if (tempProvider == "OpenRouter") {
               if (tempKey.isEmpty) {
@@ -340,7 +348,6 @@ class _GuptikScreenState extends State<GuptikScreen> {
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // 1. SEPARATE PROVIDER DROPDOWN
                     const Text("API Provider", style: TextStyle(color: Colors.grey, fontSize: 12)),
                     const SizedBox(height: 5),
                     Container(
@@ -368,7 +375,6 @@ class _GuptikScreenState extends State<GuptikScreen> {
                     ),
                     const SizedBox(height: 20),
 
-                    // 2. API KEY
                     const Text("API Key", style: TextStyle(color: Colors.grey, fontSize: 12)),
                     const SizedBox(height: 5),
                     TextField(
@@ -386,7 +392,6 @@ class _GuptikScreenState extends State<GuptikScreen> {
                     ),
                     const SizedBox(height: 20),
 
-                    // 3. BASE URL (Editable)
                     const Text("API Base URL", style: TextStyle(color: Colors.grey, fontSize: 12)),
                     const SizedBox(height: 5),
                     TextField(
@@ -401,7 +406,6 @@ class _GuptikScreenState extends State<GuptikScreen> {
                     ),
                     const SizedBox(height: 20),
 
-                    // 4. MODEL SELECTION
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
@@ -485,7 +489,6 @@ class _GuptikScreenState extends State<GuptikScreen> {
   Widget build(BuildContext context) {
     return Row(
       children: [
-        // --- SIDEBAR (History) ---
         Container(
           width: 250,
           color: const Color(0xFF1E293B),
@@ -541,11 +544,9 @@ class _GuptikScreenState extends State<GuptikScreen> {
           ),
         ),
 
-        // --- MAIN CHAT AREA ---
         Expanded(
           child: Column(
             children: [
-              // Header
               Container(
                 height: 60,
                 padding: const EdgeInsets.symmetric(horizontal: 20),
@@ -556,7 +557,6 @@ class _GuptikScreenState extends State<GuptikScreen> {
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
                     const Text("GUPTIK NEURAL", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-                    
                     Row(
                       children: [
                         Container(
@@ -581,7 +581,6 @@ class _GuptikScreenState extends State<GuptikScreen> {
                 ),
               ),
 
-              // Messages
               Expanded(
                 child: _messages.isEmpty 
                   ? Center(child: Text("Configure your API settings and start a chat.", style: TextStyle(color: Colors.grey[700])))
@@ -627,7 +626,6 @@ class _GuptikScreenState extends State<GuptikScreen> {
                     ),
               ),
 
-              // Input
               Padding(
                 padding: const EdgeInsets.all(20.0),
                 child: Row(
