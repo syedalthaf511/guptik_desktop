@@ -329,7 +329,7 @@ class _VaultScreenState extends State<VaultScreen> {
       color = Colors.orangeAccent;
     }
 
-    Navigator.push(
+   Navigator.push(
       context,
       MaterialPageRoute(
         builder: (_) => DesktopSystemFolderScreen(
@@ -420,6 +420,7 @@ class _VaultScreenState extends State<VaultScreen> {
                       if (index == 5) {
                         return _buildVirtualFolderCard("Vault Folder", LucideIcons.shield, Colors.orangeAccent);
                       }
+                      
                       // 7. Render the actual physical files (adjust index offset to +6)
                      return _buildFileCard(_files[index - 6]);
                     },
