@@ -80,7 +80,7 @@ class _GuptikScreenState extends State<GuptikScreen> {
   Future<void> _pushConfigToGateway(String provider, String url, String key, String model) async {
     try {
       await http.post(
-        Uri.parse("http://localhost:55000/api/ai-config"), // FIXED: Port updated to 55000
+        Uri.parse("http://localhost:55000/api/ai-config"),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({
           'provider': provider,
@@ -118,7 +118,6 @@ class _GuptikScreenState extends State<GuptikScreen> {
     });
   }
 
-  // 🚀 Universal AI Calling Logic supporting provider-specific headers
   Future<void> _sendMessage() async {
     if (_inputController.text.trim().isEmpty) return;
 
@@ -406,6 +405,7 @@ class _GuptikScreenState extends State<GuptikScreen> {
                     ),
                     const SizedBox(height: 20),
 
+                    // 4. MODEL SELECTION (WITH SEARCHABLE DIALOG)
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
@@ -423,25 +423,38 @@ class _GuptikScreenState extends State<GuptikScreen> {
                     const SizedBox(height: 5),
                     
                     if (tempProvider == "OpenRouter" && _cachedModels.isNotEmpty)
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 12),
-                        decoration: BoxDecoration(color: Colors.black26, borderRadius: BorderRadius.circular(8)),
-                        child: DropdownButtonHideUnderline(
-                          child: DropdownButton<String>(
-                            value: _cachedModels.any((m) => m['id'] == tempModel) ? tempModel : null,
-                            isExpanded: true,
-                            menuMaxHeight: 400,
-                            dropdownColor: const Color(0xFF0F172A),
-                            hint: Text(tempModel.isEmpty ? "Select model..." : tempModel, style: const TextStyle(color: Colors.white70)),
-                            items: _cachedModels.map((m) {
-                              return DropdownMenuItem<String>(
-                                value: m['id'],
-                                child: Text("${m['name']} (${m['id']})", style: const TextStyle(color: Colors.cyanAccent, fontSize: 13), overflow: TextOverflow.ellipsis),
+                      InkWell(
+                        onTap: () async {
+                          final String? selected = await showDialog<String>(
+                            context: context,
+                            builder: (BuildContext context) {
+                              return _SearchableDesktopModelDialog(
+                                models: _cachedModels,
+                                initialModel: tempModel,
                               );
-                            }).toList(),
-                            onChanged: (val) {
-                              if (val != null) setDialogState(() => tempModel = val);
                             },
+                          );
+                          if (selected != null) {
+                            setDialogState(() {
+                              tempModel = selected;
+                            });
+                          }
+                        },
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                          decoration: BoxDecoration(color: Colors.black26, borderRadius: BorderRadius.circular(8)),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  tempModel.isEmpty ? "Click to search & select model..." : tempModel,
+                                  style: const TextStyle(color: Colors.cyanAccent, fontSize: 13, fontFamily: 'Courier'),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                              const Icon(Icons.search, color: Colors.cyanAccent, size: 18),
+                            ],
                           ),
                         ),
                       )
@@ -660,6 +673,123 @@ class _GuptikScreenState extends State<GuptikScreen> {
           ),
         ),
       ],
+    );
+  }
+}
+
+// 🚀 SEARCHABLE DESKTOP MODEL DIALOG
+class _SearchableDesktopModelDialog extends StatefulWidget {
+  final List<Map<String, String>> models;
+  final String initialModel;
+
+  const _SearchableDesktopModelDialog({
+    required this.models,
+    required this.initialModel,
+  });
+
+  @override
+  State<_SearchableDesktopModelDialog> createState() => _SearchableDesktopModelDialogState();
+}
+
+class _SearchableDesktopModelDialogState extends State<_SearchableDesktopModelDialog> {
+  final TextEditingController _searchController = TextEditingController();
+  List<Map<String, String>> _filteredModels = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _filteredModels = widget.models;
+    _searchController.addListener(_filterModels);
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  void _filterModels() {
+    final query = _searchController.text.toLowerCase();
+    setState(() {
+      _filteredModels = widget.models.where((model) {
+        final nameMatches = model["name"]?.toLowerCase().contains(query) ?? false;
+        final idMatches = model["id"]?.toLowerCase().contains(query) ?? false;
+        return nameMatches || idMatches;
+      }).toList();
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      backgroundColor: const Color(0xFF1E293B),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: Container(
+        width: 600,
+        height: 500,
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          children: [
+            TextField(
+              controller: _searchController,
+              autofocus: true,
+              style: const TextStyle(color: Colors.white),
+              decoration: InputDecoration(
+                hintText: 'Search OpenRouter models by name or ID...',
+                hintStyle: const TextStyle(color: Colors.white38),
+                prefixIcon: const Icon(Icons.search, color: Colors.cyanAccent),
+                filled: true,
+                fillColor: const Color(0xFF0F172A),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(8),
+                  borderSide: BorderSide.none,
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Expanded(
+              child: ListView.separated(
+                itemCount: _filteredModels.length,
+                separatorBuilder: (ctx, i) => const Divider(color: Colors.white10, height: 1),
+                itemBuilder: (context, index) {
+                  final model = _filteredModels[index];
+                  final modelId = model["id"] ?? "";
+                  final modelName = model["name"] ?? "";
+                  final isSelected = modelId == widget.initialModel;
+
+                  return ListTile(
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                    title: Text(
+                      modelName,
+                      style: TextStyle(
+                        color: isSelected ? Colors.cyanAccent : Colors.white,
+                        fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                        fontSize: 14,
+                      ),
+                    ),
+                    subtitle: Text(
+                      modelId,
+                      style: const TextStyle(color: Colors.white54, fontSize: 11, fontFamily: 'Courier'),
+                    ),
+                    trailing: isSelected ? const Icon(Icons.check_circle, color: Colors.cyanAccent, size: 18) : null,
+                    onTap: () {
+                      Navigator.pop(context, modelId);
+                    },
+                  );
+                },
+              ),
+            ),
+            const SizedBox(height: 8),
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Close', style: TextStyle(color: Colors.grey)),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
