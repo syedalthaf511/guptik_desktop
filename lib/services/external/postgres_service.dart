@@ -52,6 +52,16 @@ class PostgresService {
       _isConnected = true;
       print("✅ Database Connected!");
 
+      try {
+        await _connection!.execute(
+          'ALTER TABLE mp_channels ADD COLUMN IF NOT EXISTS tunnel_url TEXT;',
+        );
+        await _connection!.execute(
+          'ALTER TABLE mp_channels ADD COLUMN IF NOT EXISTS owner_uid UUID;',
+        );
+        print("✅ DB Check: mp_channels profile routing columns are ready.");
+      } catch (_) {}
+
       // 🚀 THE MAGIC FIX: This runs as the superuser, so it will NEVER throw a permission error!
       try {
         await _connection!.execute(
@@ -64,6 +74,8 @@ class PostgresService {
       } catch (e) {
         print("Migration warning: $e");
       }
+
+
 
       // 🚀 THE MIGRATION FIX: Check and add the column every time we connect!
       try {
@@ -769,6 +781,8 @@ class PostgresService {
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         channel_id TEXT NOT NULL UNIQUE,
         user_id UUID NOT NULL,
+        owner_uid UUID,
+        tunnel_url TEXT,
         channel_name TEXT NOT NULL,
         bio TEXT DEFAULT '',
         avatar_path TEXT,

@@ -21,7 +21,8 @@ class CreatorProfileScreen extends StatefulWidget {
 
 class _CreatorProfileScreenState extends State<CreatorProfileScreen> {
   late PlayerApiService _apiService;
-  
+  late String _resolvedNodeUrl; // 🚀 self-healing: may differ from widget.creatorNodeUrl if that was empty/stale
+
   Map<String, dynamic>? _profileData;
   List<PlayerVideo> _normalVideos = [];
   List<PlayerVideo> _reels = [];
@@ -39,18 +40,39 @@ class _CreatorProfileScreenState extends State<CreatorProfileScreen> {
   @override
   void initState() {
     super.initState();
-    final safeUrl = widget.creatorNodeUrl.startsWith('http') 
-        ? widget.creatorNodeUrl 
-        : 'https://${widget.creatorNodeUrl}';
-        
-    _apiService = PlayerApiService(gatewayUrl: safeUrl);
-    
+    _resolvedNodeUrl = widget.creatorNodeUrl;
     _loadProfileData();
   }
 
+  /// 🚀 SELF-HEALING TUNNEL RESOLUTION: if we weren't given a node URL (or it's
+  /// the placeholder public domain), look up the CURRENT tunnel_url for this
+  /// channel fresh from mp_channels instead of trusting a possibly-stale value
+  /// stored on the video itself. Mirrors MobileProfileScreen's approach.
+  Future<void> _resolveNodeUrlIfNeeded() async {
+    if (_resolvedNodeUrl.isNotEmpty && !_resolvedNodeUrl.contains('myqrmart.com')) {
+      return;
+    }
+    try {
+      final channelMeta = await Supabase.instance.client
+          .from('mp_channels')
+          .select('tunnel_url')
+          .eq('channel_id', widget.creatorUid)
+          .maybeSingle();
+
+      if (channelMeta != null && channelMeta['tunnel_url'] != null) {
+        _resolvedNodeUrl = channelMeta['tunnel_url'].toString();
+      }
+    } catch (e) {
+      debugPrint('⚠️ Tunnel lookup fallback warning: $e');
+    }
+  }
+
   Future<void> _loadProfileData() async {
-    final profileFuture = _apiService.fetchChannelProfile(widget.creatorNodeUrl, widget.creatorUid);
-    final videosFuture = _apiService.fetchChannelVideos(widget.creatorNodeUrl, widget.creatorUid);
+    await _resolveNodeUrlIfNeeded();
+    _apiService = PlayerApiService(gatewayUrl: _resolvedNodeUrl);
+
+    final profileFuture = _apiService.fetchChannelProfile(_resolvedNodeUrl, widget.creatorUid);
+    final videosFuture = _apiService.fetchChannelVideos(_resolvedNodeUrl, widget.creatorUid);
 
     final results = await Future.wait([profileFuture, videosFuture]);
 
@@ -75,7 +97,7 @@ class _CreatorProfileScreenState extends State<CreatorProfileScreen> {
     final currentUser = Supabase.instance.client.auth.currentUser;
     if (currentUser != null) {
       final isSubbed = await _apiService.checkSubscriptionStatus(
-        widget.creatorNodeUrl, 
+        _resolvedNodeUrl, 
         widget.creatorUid, 
         currentUser.id
       );
@@ -170,7 +192,9 @@ class _CreatorProfileScreenState extends State<CreatorProfileScreen> {
   }
 
   Widget _buildVideoRow(PlayerVideo video) {
-    final safeUrl = widget.creatorNodeUrl.startsWith('http') ? widget.creatorNodeUrl : 'https://${widget.creatorNodeUrl}';
+    final safeUrl = _resolvedNodeUrl.contains('192.168.') || _resolvedNodeUrl.contains('10.0.') || _resolvedNodeUrl.contains('127.0.0.1')
+        ? (_resolvedNodeUrl.startsWith('http://') ? _resolvedNodeUrl : 'http://$_resolvedNodeUrl')
+        : (_resolvedNodeUrl.startsWith('http') ? _resolvedNodeUrl : 'https://$_resolvedNodeUrl');
     final thumbnailUrl = '$safeUrl/player/video/thumbnail/${video.videoId}';
     
     final bool isSelected = _selectedVideoIds.contains(video.videoId);

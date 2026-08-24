@@ -910,8 +910,8 @@ class _DesktopMediaPlayerScreenState extends State<DesktopMediaPlayerScreen> wit
                           context,
                           MaterialPageRoute(
                             builder: (_) => CreatorProfileScreen(
-                              creatorUid: widget.video.creatorUid,
-                              creatorNodeUrl: widget.video.creatorUrl,
+                              creatorUid: widget.video.channelId, // 🚀 use channelId, not creatorUid (they can diverge on reposts)
+                              creatorNodeUrl: '', // 🚀 force fresh tunnel_url lookup instead of trusting a possibly stale stored URL
                             ),
                           ),
                         );

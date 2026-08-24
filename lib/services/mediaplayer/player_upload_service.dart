@@ -124,17 +124,21 @@ class PlayerUploadService {
 
       await connection.execute(
         Sql.named("""
-          INSERT INTO mp_channels (channel_id, user_id, channel_name, monetization_enabled) 
-          VALUES (@cid, @uid, @cname, @mon) 
+          INSERT INTO mp_channels (channel_id, user_id, channel_name, monetization_enabled, owner_uid, tunnel_url) 
+          VALUES (@cid, @uid, @cname, @mon, @ownerUid, @tunnelUrl) 
           ON CONFLICT (channel_id) 
           DO UPDATE SET channel_name = EXCLUDED.channel_name,
-                        monetization_enabled = EXCLUDED.monetization_enabled
+                        monetization_enabled = EXCLUDED.monetization_enabled,
+                        owner_uid = EXCLUDED.owner_uid,
+                       tunnel_url = EXCLUDED.tunnel_url
         """),
         parameters: {
           'cid': currentUser.id, 
           'uid': currentUser.id,
           'cname': channelName,
           'mon': isMonetized,
+          'ownerUid': currentUser.id,
+          'tunnelUrl': publicUrl, // Captures the sanitized public tunnel URL
         }
       );
 

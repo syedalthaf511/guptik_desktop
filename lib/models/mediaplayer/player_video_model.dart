@@ -1,6 +1,7 @@
 class PlayerVideo {
   final String videoId;
   final String creatorUid;
+  final String channelId;
   final String title;
   final String description;
   final String filePath; 
@@ -54,6 +55,7 @@ class PlayerVideo {
   PlayerVideo({
     required this.videoId,
     required this.creatorUid,
+    this.channelId = '',
     required this.title,
     required this.description,
     required this.filePath,
@@ -123,6 +125,7 @@ class PlayerVideo {
     return PlayerVideo(
       videoId: json['video_id'] ?? json['id'] ?? '',
       creatorUid: json['creator_uid'] ?? '',
+      channelId: json['channel_id']?.toString() ?? json['creator_uid']?.toString() ?? '',
       title: json['title'] ?? 'Untitled Broadcast',
       description: json['description'] ?? '',
       filePath: json['file_path'] ?? '',
@@ -179,6 +182,7 @@ class PlayerVideo {
   Map<String, dynamic> toJson() => {
         'video_id': videoId,
         'creator_uid': creatorUid,
+        'channel_id': channelId,
         'title': title,
         'description': description,
         'file_path': filePath,

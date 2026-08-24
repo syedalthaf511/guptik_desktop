@@ -2097,8 +2097,7 @@ void main() async {
   // =========================================================================
   // 🚀 9. CREATOR CHANNEL PROFILE & VIDEOS
   // =========================================================================
-  
-  // A. Fetch the Channel Bio and Subscriber Count
+   // A. Fetch the Channel Bio and Subscriber Count
   router.get('/channel/profile/<channelId>', (Request req, String channelId) async {
     try {
       final connection = await Connection.open(
@@ -2124,7 +2123,6 @@ void main() async {
     }
   });
 
-  // B. Fetch all videos hosted by this creator on this Node (WITH REAL VISIBILITY)
   router.get('/channel/videos/<channelId>', (Request req, String channelId) async {
     try {
       final connection = await Connection.open(
@@ -2132,13 +2130,14 @@ void main() async {
         settings: const ConnectionSettings(sslMode: SslMode.disable),
       );
       
-      // 🚀 Added v.visibility, v.category, v.tags, v.made_for_kids, v.age_rating
-      // to the SELECT query! Also filters out deleted videos!
+      // 🚀 FIXED: Removed non-existent v.creator_uid column. Use v.channel_id exclusively.
       final result = await connection.execute(
         Sql.named("""
-          SELECT v.id, v.title, v.description, v.file_path, v.view_count_local, v.like_count_local, v.comment_count_local, c.channel_name, v.is_reel, v.upload_timestamp, v.visibility, v.category, v.tags, v.made_for_kids, v.age_rating
+          SELECT v.id, v.title, v.description, v.file_path, v.view_count_local, v.like_count_local, v.comment_count_local, 
+                 COALESCE(c.channel_name, 'Creator') as channel_name, 
+                 v.is_reel, v.upload_timestamp, v.visibility, v.category, v.tags, v.made_for_kids, v.age_rating
           FROM mp_videos v
-          JOIN mp_channels c ON v.channel_id = c.channel_id
+          LEFT JOIN mp_channels c ON v.channel_id = c.channel_id
           WHERE v.channel_id = @cid AND v.is_deleted = false
           ORDER BY v.upload_timestamp DESC
         """),
@@ -2159,7 +2158,7 @@ void main() async {
           'channel_name': row[7]?.toString() ?? 'Creator', 
           'is_reel': row[8] as bool? ?? false, 
           'created_at': row[9]?.toString() ?? DateTime.now().toString(), 
-          'visibility': row[10]?.toString() ?? 'public', // 🚀 Map visibility
+          'visibility': row[10]?.toString() ?? 'public', 
           'category': row[11]?.toString() ?? '',
           'tags': row[12] is List ? (row[12] as List).map((e) => e.toString()).toList() : <String>[],
           'made_for_kids': row[13] as bool? ?? false,
@@ -2169,9 +2168,11 @@ void main() async {
       }
       return Response(200, body: jsonEncode(videos), headers: {'Content-Type': 'application/json'});
     } catch (e) {
+      print("❌ Channel videos error: $e");
       return Response(500, body: jsonEncode({'error': e.toString()}));
     }
   });
+
 
 
   // 🚀 NEW: DELETE VIDEO ROUTE
@@ -2454,6 +2455,7 @@ void main() async {
       return Response(200, body: jsonEncode({'is_subscribed': false}), headers: {'Content-Type': 'application/json'}); 
     }
   });
+ 
 
 // =========================================================================
   // 🚀 MOBILE CROSS-CONNECTION PUBLISHING GATEWAY
@@ -2463,6 +2465,7 @@ void main() async {
       // Decode secure URL-encoded parameters out of incoming client headers
       final videoId = req.headers['x-video-id'] ?? '';
       final creatorUid = req.headers['x-creator-uid'] ?? '';
+      final channelId = req.headers['x-channel-id'] ?? creatorUid; // 🚀 Unified channel mapping
       final title = Uri.decodeComponent(req.headers['x-title'] ?? '');
       final description = Uri.decodeComponent(req.headers['x-description'] ?? '');
       final category = req.headers['x-category'] ?? 'entertainment';
@@ -2477,37 +2480,82 @@ void main() async {
         return Response.badRequest(body: 'Missing core tracking identifiers');
       }
 
-      // 🚀 TARGET PATH DESIGN: Matches your video streaming fallback criteria perfectly!
-      final filename = "$videoId.mp4";
-      final file = File('/app/storage/$filename');
-      
-      // 🚀 THE FIX: Use addStream instead of pipe to handle the byte stream correctly
-    final sink = file.openWrite();
-    await sink.addStream(req.read());
-    await sink.close();
-
-      // Connect internally to your containerized Postgres database cluster
+      // Connect internally to your containerized Postgres database cluster first
       final connection = await Connection.open(
         Endpoint(host: 'db', port: 5432, database: 'postgres', username: 'postgres', password: 'GuptikSystemPassword2026'),
         settings: const ConnectionSettings(sslMode: SslMode.disable),
       );
 
-      // Verify or generate matching channel info inside your local node cache
+      // 🚀 1. LOOK UP CREATOR'S OFFICIAL CLOUD TUNNEL URL FROM DATABASE
+      String officialCreatorUrl = '';
+      try {
+        final channelResult = await connection.execute(
+          Sql.named("SELECT tunnel_url FROM mp_channels WHERE channel_id::TEXT = @cid::TEXT OR owner_uid::TEXT = @cid::TEXT LIMIT 1"),
+          parameters: {'cid': channelId},
+        );
+        if (channelResult.isNotEmpty) {
+          officialCreatorUrl = channelResult.first[0]?.toString().trim() ?? '';
+        }
+      } catch (dbLookupErr) {
+        print("⚠️ Tunnel URL lookup warning: $dbLookupErr");
+      }
+
+      // 🚀 2. FALLBACK & SANITIZATION: Automatically enforce active local network IP & Port 55000
+      if (officialCreatorUrl.isEmpty || officialCreatorUrl.contains('192.168.1.15') || officialCreatorUrl.contains('your-tunnel-url')) {
+        officialCreatorUrl = '192.168.1.186:55000';
+      }
+
+      // Enforce port 55000 for local network IPs if missing
+      if ((officialCreatorUrl.contains('192.168.') || officialCreatorUrl.contains('10.0.') || officialCreatorUrl.contains('127.0.0.1')) && !officialCreatorUrl.contains(':55000')) {
+        officialCreatorUrl = '$officialCreatorUrl:55000';
+      }
+
+      // 🚀 3. CLEAN UP URL FORMAT: Strip http:// or trailing slashes to match desktop records format perfectly
+      officialCreatorUrl = officialCreatorUrl
+          .replaceAll('https://', '')
+          .replaceAll('http://', '');
+      if (officialCreatorUrl.endsWith('/')) {
+        officialCreatorUrl = officialCreatorUrl.substring(0, officialCreatorUrl.length - 1);
+      }
+
+      // 🚀 TARGET PATH DESIGN: Matches your video streaming fallback criteria perfectly!
+      final filename = "$videoId.mp4";
+      final file = File('/app/storage/$filename');
+      
+      // 🚀 THE FIX: Use addStream instead of pipe to handle the byte stream correctly
+      final sink = file.openWrite();
+      await sink.addStream(req.read());
+      await sink.close();
+
+      // Verify or generate matching channel info inside your local node cache using the unified channelId
       await connection.execute(
-          Sql.named("INSERT INTO mp_channels (channel_id, user_id, channel_name) VALUES (@cid, @uid, @cname) ON CONFLICT (channel_id) DO UPDATE SET channel_name = EXCLUDED.channel_name"),
-        parameters: {'cid': creatorUid, 'uid': creatorUid, 'cname': channelName}
+        Sql.named("""
+          INSERT INTO mp_channels (channel_id, user_id, channel_name, owner_uid, tunnel_url) 
+          VALUES (@cid, @uid, @cname, @ownerUid, @tunnelUrl) 
+          ON CONFLICT (channel_id) 
+          DO UPDATE SET channel_name = EXCLUDED.channel_name,
+                        owner_uid = EXCLUDED.owner_uid,
+                        tunnel_url = EXCLUDED.tunnel_url
+        """),
+        parameters: {
+            'cid': channelId, 
+            'uid': creatorUid, 
+            'cname': channelName,
+            'ownerUid': creatorUid,
+            'tunnelUrl': officialCreatorUrl,
+        },
       );
 
       // Insert full metadata block using the exact schema definitions expected by your player APIs
       await connection.execute(
         Sql.named("""
           INSERT INTO mp_videos 
-          (id, channel_id, title, description, file_path, tags, category, visibility, is_reel, monetization_enabled) 
-          VALUES (@vid::UUID, @cid, @title, @desc, @path, @tags, @cat, @vis, @reel, @mon)
+          (id, channel_id, title, description, file_path, tags, category, visibility, is_reel, monetization_enabled, made_for_kids, age_rating) 
+          VALUES (@vid::UUID, @cid, @title, @desc, @path, @tags, @cat, @vis, @reel, @mon, false, 'all')
         """),
         parameters: {
           'vid': videoId,
-          'cid': creatorUid,
+          'cid': channelId, // 🚀 Uses the explicitly passed mobile channel ID
           'title': title,
           'desc': description,
           'path': "/app/storage/$filename",
@@ -2515,12 +2563,12 @@ void main() async {
           'cat': category.toLowerCase(),
           'vis': visibility,
           'reel': isReel,
-          'mon': isMonetized
+          'mon': isMonetized,
         }
       );
 
       await connection.close();
-      print('✅ Mobile Stream Upload successfully integrated into local mp_videos tables!');
+      print('✅ Mobile Stream Upload successfully integrated into local mp_videos tables for channel: $channelId with cloud URL: $officialCreatorUrl');
       
       return Response.ok(jsonEncode({'status': 'success', 'video_id': videoId}));
     } catch (e) {
@@ -2528,8 +2576,7 @@ void main() async {
       return Response.internalServerError(body: 'Gateway Media Sync breakdown: $e');
     }
   });
-
-
+  
   // -------------------------------------------------------------------------
   // 🚀 TRUST ME WEBRTC (AUDIO/VIDEO) SIGNALING ENDPOINTS
   // -------------------------------------------------------------------------

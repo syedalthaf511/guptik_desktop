@@ -8,8 +8,45 @@ import '../../models/mediaplayer/video_sticker_model.dart';
 class PlayerApiService {
   // The specific Cloudflare Tunnel URL or Localhost IP for the creator's node
   final String? gatewayUrl;
+  late final String? cleanedGatewayUrl;
 
-  PlayerApiService({this.gatewayUrl});
+  PlayerApiService({this.gatewayUrl}) {
+    cleanedGatewayUrl = _sanitizeUrl(gatewayUrl);
+  }
+
+  // 🚀 URL SANITIZER: Forces plain http, appends port 55000 for local IPs, and prevents HandshakeExceptions
+  static String? _sanitizeUrl(String? url) {
+    if (url == null || url.trim().isEmpty) return null;
+    String clean = url.trim();
+
+    // Auto-swap old legacy IPs if present
+    if (clean.contains('192.168.1.15')) {
+      clean = clean.replaceAll('192.168.1.15', '192.168.1.186');
+    }
+
+    // Force plain http for all local network addresses to prevent HandshakeExceptions
+    if (clean.contains('192.168.') || clean.contains('10.0.') || clean.contains('127.0.0.1') || clean.contains('localhost')) {
+      clean = clean.replaceAll('https://', 'http://');
+      if (!clean.startsWith('http://')) {
+        clean = 'http://$clean';
+      }
+    } else {
+      if (!clean.startsWith('http')) {
+        clean = 'https://$clean';
+      }
+    }
+
+    if (clean.endsWith('/')) {
+      clean = clean.substring(0, clean.length - 1);
+    }
+
+    // Ensure port 55000 is attached for local nodes
+    if ((clean.contains('192.168.') || clean.contains('10.0.') || clean.contains('127.0.0.1')) && !clean.contains(':55000')) {
+      clean = '$clean:55000';
+    }
+
+    return clean;
+  }
 
   // =========================================================================
   // 🚀 GLOBAL DIRECTORY: Fetch Feed from Admin Supabase Cloud
@@ -363,8 +400,9 @@ class PlayerApiService {
   /// Fetches the channel bio, name, and subscriber count from a specific node
   Future<Map<String, dynamic>?> fetchChannelProfile(String nodeUrl, String channelId) async {
     try {
-      // 🚀 THE FIX: Check if it's missing https:// and add it!
-      final safeUrl = nodeUrl.startsWith('http') ? nodeUrl : 'https://$nodeUrl';
+      // 🚀 THE FIX: Use the local-IP-aware sanitizer (forces http:// for 192.168.x.x
+      // nodes instead of blindly assuming https://, which caused HandshakeExceptions)
+      final safeUrl = _sanitizeUrl(nodeUrl) ?? nodeUrl;
       
       final response = await http.get(Uri.parse('$safeUrl/channel/profile/$channelId'));
       if (response.statusCode == 200) {
@@ -380,7 +418,7 @@ class PlayerApiService {
  /// Fetches all videos hosted on a specific creator's node
   Future<List<PlayerVideo>> fetchChannelVideos(String nodeUrl, String channelId) async {
     try {
-      final safeUrl = nodeUrl.startsWith('http') ? nodeUrl : 'https://$nodeUrl';
+      final safeUrl = _sanitizeUrl(nodeUrl) ?? nodeUrl;
       
       final response = await http.get(Uri.parse('$safeUrl/channel/videos/$channelId'));
       
@@ -429,7 +467,7 @@ class PlayerApiService {
   /// Checks if the current user is subscribed to this creator's node
   Future<bool> checkSubscriptionStatus(String nodeUrl, String channelId, String subscriberUid) async {
     try {
-      final safeUrl = nodeUrl.startsWith('http') ? nodeUrl : 'https://$nodeUrl';
+      final safeUrl = _sanitizeUrl(nodeUrl) ?? nodeUrl;
       final response = await http.get(Uri.parse('$safeUrl/channel/subscribe/status/$channelId/$subscriberUid'));
       if (response.statusCode == 200) {
         return jsonDecode(response.body)['is_subscribed'] ?? false;
@@ -527,7 +565,7 @@ class PlayerApiService {
   /// Toggles the subscription on the creator's node AND syncs to Admin Supabase
   Future<bool?> toggleSubscription(String nodeUrl, String channelId, String subscriberUid) async {
     try {
-      final safeUrl = nodeUrl.startsWith('http') ? nodeUrl : 'https://$nodeUrl';
+      final safeUrl = _sanitizeUrl(nodeUrl) ?? nodeUrl;
       
       // 1. Tell the Local Docker Node
       final response = await http.post(
