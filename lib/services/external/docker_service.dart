@@ -1728,6 +1728,8 @@ void main() async {
     }
   });
 
+  
+
 // 5. THUMBNAIL ROUTE (With Server-Side Auto-Generation)
   router.get('/player/video/thumbnail/<videoId>', (Request req, String videoId) async {
     try {
@@ -2576,6 +2578,74 @@ void main() async {
       return Response.internalServerError(body: 'Gateway Media Sync breakdown: $e');
     }
   });
+
+  router.post('/player/video/sticker', (Request req) async {
+  try {
+    // Read metadata from headers — same pattern as /player/video/upload
+    final videoId = req.headers['x-video-id'] ?? '';
+    final productName = Uri.decodeComponent(req.headers['x-product-name'] ?? '');
+    final timestampInVideo = double.tryParse(req.headers['x-timestamp'] ?? '0') ?? 0.0;
+    final durationOnScreen = double.tryParse(req.headers['x-duration'] ?? '8') ?? 8.0;
+    final price = double.tryParse(req.headers['x-price'] ?? '');
+    final mrp = double.tryParse(req.headers['x-mrp'] ?? '0') ?? 0.0;
+    final currency = req.headers['x-currency'] ?? 'USD';
+    final description = Uri.decodeComponent(req.headers['x-description'] ?? '');
+    final linkUrl = req.headers['x-link-url'] != null ? Uri.decodeComponent(req.headers['x-link-url']!) : null;
+    final clickableZoneRaw = req.headers['x-clickable-zone'] != null ? Uri.decodeComponent(req.headers['x-clickable-zone']!) : null;
+
+    if (videoId.isEmpty || productName.isEmpty) {
+      return Response.badRequest(body: 'Missing video_id or product_name');
+    }
+
+    // Save image bytes (if any) into /app/storage/ — same folder videos use,
+    // already served by the existing /internal/media/<filename> route
+    String? imagePath;
+    final bodyBytes = await req.read().expand((chunk) => chunk).toList();
+    if (bodyBytes.isNotEmpty) {
+      final filename = 'sticker_${DateTime.now().millisecondsSinceEpoch}.png';
+      final file = File('/app/storage/$filename');
+      await file.writeAsBytes(bodyBytes);
+      final baseUrl = '${req.requestedUri.scheme}://${req.requestedUri.host}:${req.requestedUri.port}';
+      imagePath = '$baseUrl/internal/media/$filename';
+    }
+
+    // Insert into local Postgres — same table/columns as desktop's addProductSticker()
+    final connection = await Connection.open(
+      Endpoint(host: 'db', port: 5432, database: 'postgres', username: 'postgres', password: 'GuptikSystemPassword2026'),
+      settings: const ConnectionSettings(sslMode: SslMode.disable),
+    );
+
+    await connection.execute("""
+      ALTER TABLE mp_sticker_products_catalog
+        ADD COLUMN IF NOT EXISTS mrp DECIMAL DEFAULT 0,
+        ADD COLUMN IF NOT EXISTS duration_on_screen DECIMAL DEFAULT 8
+    """);
+
+    final result = await connection.execute(
+      Sql.named("""
+        INSERT INTO mp_sticker_products_catalog
+          (video_id, product_id, timestamp_in_video, duration_on_screen,
+           clickable_zone, product_name, price, mrp, currency, description,
+           link_url, image_path, stock_status, is_active)
+        VALUES (@vid, gen_random_uuid()::text, @ts, @dur, @zone, @name,
+                 @price, @mrp, @cur, @desc, @link, @img, 'in_stock', TRUE)
+        RETURNING product_id
+      """),
+      parameters: {
+        'vid': videoId, 'ts': timestampInVideo, 'dur': durationOnScreen,
+        'zone': clickableZoneRaw, 'name': productName, 'price': price,
+        'mrp': mrp, 'cur': currency, 'desc': description,
+        'link': linkUrl, 'img': imagePath,
+      },
+    );
+    await connection.close();
+
+    final productId = result.isNotEmpty ? result.first[0]?.toString() : null;
+    return Response(200, body: jsonEncode({'status': 'ok', 'product_id': productId}), headers: {'Content-Type': 'application/json'});
+  } catch (e) {
+    return Response(500, body: jsonEncode({'error': 'Failed to add sticker: $e'}));
+  }
+});
   
   // -------------------------------------------------------------------------
   // 🚀 TRUST ME WEBRTC (AUDIO/VIDEO) SIGNALING ENDPOINTS

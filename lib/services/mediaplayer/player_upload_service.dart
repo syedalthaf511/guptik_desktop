@@ -94,6 +94,7 @@ class PlayerUploadService {
       await _supabase.from('mp_videos').insert({
         'video_id': videoId,
         'creator_uid': currentUser.id,
+        'channel_id': currentUser.id, // 🚀 FIX: was missing — Supabase mp_videos.channel_id stayed NULL for every desktop upload, breaking any query (like mobile's) that filters by channel_id
         'channel_name': channelName,
         'title': title,
         'description': description,
