@@ -354,6 +354,7 @@ void main() async {
     }
   });
 
+ 
   router.get('/vault/system-folder/<type>', (Request request, String type) async {
     try {
       final connection = await Connection.open(
@@ -371,10 +372,50 @@ void main() async {
         result = await connection.execute(
           "SELECT v.id::text, v.title, v.file_path FROM mp_saved_videos s JOIN mp_videos v ON s.video_id = v.id::text ORDER BY s.saved_timestamp DESC"
         );
+      } else if (type == 'stickers') {
+        // 🚀 FIX: JOIN with mp_videos AND mp_channels so we return the REAL
+        // video's id/title AND the REAL channel's name/id alongside the
+        // sticker's own info. Previously this only selected the sticker's
+        // own row id, which isn't a playable video — tapping it caused
+        // "Creator Node Unreachable / HTTP 404" on desktop. Then, even after
+        // that was fixed, the title/channel shown were still the sticker's
+        // product name and a generic label instead of the real video's info.
+        result = await connection.execute(
+          """
+          SELECT s.product_id::text, s.product_name, s.image_path, s.price, s.currency,
+                 v.id::text AS real_video_id, v.title AS video_title,
+                 c.channel_name, c.channel_id
+          FROM mp_sticker_products_catalog s
+          JOIN mp_videos v ON s.video_id::text = v.id::text
+          LEFT JOIN mp_channels c ON v.channel_id = c.channel_id
+          WHERE s.is_active = TRUE
+          ORDER BY s.created_at DESC
+          """
+        );
       }
       await connection.close();
 
       final List<Map<String, dynamic>> loadedItems = [];
+      if (result != null && type == 'stickers') {
+        // 🚀 FIX: now includes real_video_id/video_title/channel_name/channel_id
+        // so the mobile UI can navigate to the actual video and display its
+        // real title and real creator, not just show sticker details.
+        for (final row in result) {
+          loadedItems.add({
+            'video_id': row[5]?.toString() ?? '', // 🚀 FIX: the REAL video's id
+            'title': row[1].toString(),
+            'image_url': row[2]?.toString() ?? '',
+            'size_bytes': 0,
+            'is_sticker': true,
+            'price': row[3],
+            'currency': row[4]?.toString() ?? 'USD',
+            'video_title': row[6]?.toString() ?? '', // the video's own title
+            'channel_name': row[7]?.toString() ?? 'Creator', // 🚀 ADDED: the real channel name
+            'channel_id': row[8]?.toString() ?? '', // 🚀 ADDED: the real channel id
+          });
+        }
+        return Response.ok(jsonEncode(loadedItems), headers: {'Content-Type': 'application/json'});
+      }
       if (result != null) {
         for (final row in result) {
           final String videoId = row[0].toString();

@@ -139,11 +139,22 @@ class _DesktopSystemFolderScreenState extends State<DesktopSystemFolderScreen> {
             ORDER BY d.last_edited_at DESC
           ''');
         } else if (widget.folderType == 'stickers') {
+          // 🚀 FIX: JOIN with mp_videos AND mp_channels so we get the REAL
+          // video's id/title/file_path AND the REAL channel's name/id —
+          // previously this used the sticker's own id as the video id, and
+          // hardcoded 'Sticker Asset' / 'local_sticker' instead of the actual
+          // creator, so the media player showed wrong title + wrong channel
+          // even after the video itself started playing correctly.
           result = await connection.execute('''
-            SELECT id::text, product_name, image_path, price, currency, created_at
-            FROM mp_sticker_products_catalog
-            WHERE is_active = TRUE
-            ORDER BY created_at DESC
+            SELECT v.id::text, v.title, v.file_path, v.view_count_local,
+                   v.like_count_local, v.comment_count_local, c.channel_name,
+                   v.is_reel, v.upload_timestamp, c.channel_id,
+                   s.product_name, s.price, s.currency
+            FROM mp_sticker_products_catalog s
+            JOIN mp_videos v ON s.video_id::text = v.id::text
+            LEFT JOIN mp_channels c ON v.channel_id = c.channel_id
+            WHERE s.is_active = TRUE
+            ORDER BY s.created_at DESC
           ''');
         }
 
@@ -154,17 +165,17 @@ class _DesktopSystemFolderScreenState extends State<DesktopSystemFolderScreen> {
           for (final row in result) {
             if (widget.folderType == 'stickers') {
               final Map<String, dynamic> stickerJsonMap = {
-                'video_id': row[0].toString(),
-                'title': row[1].toString(),
-                'description': 'Price: ${row[4]} ${row[3]}',
-                'file_path': row[2]?.toString() ?? '',
-                'view_count': 0,
-                'like_count': 0,
-                'comment_count': 0,
-                'channel_name': 'Sticker Asset',
-                'is_reel': false,
-                'created_at': row[5]?.toString() ?? DateTime.now().toString(),
-                'creator_uid': 'local_sticker',
+                'video_id': row[0].toString(), // 🚀 FIX: the REAL video id
+                'title': row[1].toString(), // 🚀 FIX: the REAL video title, not the product name
+                'description': 'Sticker: ${row[10]} • Price: ${row[11]} ${row[12]}', // sticker info preserved here instead
+                'file_path': row[2]?.toString() ?? '', // 🚀 FIX: the REAL video's file_path
+                'view_count': row[3] ?? 0,
+                'like_count': row[4] ?? 0,
+                'comment_count': row[5] ?? 0,
+                'channel_name': row[6]?.toString() ?? 'Creator', // 🚀 FIX: the REAL channel name, not 'Sticker Asset'
+                'is_reel': row[7] as bool? ?? false,
+                'created_at': row[8]?.toString() ?? DateTime.now().toString(),
+                'creator_uid': row[9]?.toString() ?? '', // 🚀 FIX: the REAL channel id, not 'local_sticker'
               };
               loadedVideos.add(PlayerVideo.fromJson(stickerJsonMap, safeUrl));
             } else {
