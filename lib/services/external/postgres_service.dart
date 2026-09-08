@@ -34,6 +34,164 @@ class PostgresService {
   // These methods handle the raw TCP connections between the Flutter Desktop App
   // and the local Docker PostgreSQL container running on port 55432.
 
+  // ==============================================================================
+  // 🚀 ADDED: CENTRALIZED SCHEMA MIGRATIONS
+  // ==============================================================================
+  // Root cause fixed here: connectExistingUser() (used on every normal app
+  // launch for a returning user) connects with a PER-USER role that doesn't
+  // own tables like mp_commented_videos, so it could never run ALTER TABLE —
+  // only connect() (superuser, but only called once at registration) could.
+  // That meant schema changes added after a user's first registration (like
+  // is_deleted/is_edited/edited_at, or new tables like mp_comment_reactions)
+  // would NEVER get created for any returning user, causing 500 errors on
+  // routes that depend on them.
+  //
+  // This method opens its OWN short-lived superuser connection specifically
+  // for migrations, independent of whichever connection handles the actual
+  // session — and is called from BOTH connect() and connectExistingUser(),
+  // so migrations always run on every launch, regardless of login path.
+  Future<void> _runSchemaMigrations() async {
+    Connection? migrationConn;
+    try {
+      migrationConn = await Connection.open(
+        Endpoint(
+          host: 'localhost',
+          port: 55432,
+          database: 'postgres',
+          username: 'postgres',
+          password: dockerMasterPassword,
+        ),
+        settings: const ConnectionSettings(sslMode: SslMode.disable),
+      );
+
+      try {
+        await migrationConn.execute(
+          'ALTER TABLE mp_channels ADD COLUMN IF NOT EXISTS tunnel_url TEXT;',
+        );
+        await migrationConn.execute(
+          'ALTER TABLE mp_channels ADD COLUMN IF NOT EXISTS owner_uid UUID;',
+        );
+        print("✅ DB Check: mp_channels profile routing columns are ready.");
+      } catch (_) {}
+
+      try {
+        await migrationConn.execute(
+          'ALTER TABLE mp_commented_videos ADD COLUMN IF NOT EXISTS viewer_name TEXT DEFAULT \'Creator\';',
+        );
+        await migrationConn.execute(
+          'ALTER TABLE mp_commented_videos ADD COLUMN IF NOT EXISTS parent_comment_id TEXT;',
+        );
+        await migrationConn.execute(
+          'ALTER TABLE mp_commented_videos ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN DEFAULT FALSE;',
+        );
+        await migrationConn.execute(
+          'ALTER TABLE mp_commented_videos ADD COLUMN IF NOT EXISTS is_edited BOOLEAN DEFAULT FALSE;',
+        );
+        await migrationConn.execute(
+          'ALTER TABLE mp_commented_videos ADD COLUMN IF NOT EXISTS edited_at TIMESTAMPTZ;',
+        );
+        print("✅ DB Check: mp_commented_videos migration columns are ready.");
+      } catch (e) {
+        print("Migration warning: $e");
+      }
+
+      try {
+        await migrationConn.execute('''
+          CREATE TABLE IF NOT EXISTS mp_comment_reactions (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            comment_id TEXT NOT NULL,
+            reactor_uid TEXT NOT NULL,
+            reaction_type TEXT NOT NULL,
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+            UNIQUE (comment_id, reactor_uid)
+          )
+        ''');
+        print("✅ DB Check: mp_comment_reactions table is ready.");
+      } catch (e) {
+        print("Migration warning: $e");
+      }
+
+      try {
+        await migrationConn.execute('''
+          CREATE TABLE IF NOT EXISTS mp_comment_reports (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            comment_id TEXT NOT NULL,
+            reporter_uid TEXT NOT NULL,
+            reason TEXT,
+            created_at TIMESTAMPTZ DEFAULT NOW()
+          )
+        ''');
+        print("✅ DB Check: mp_comment_reports table is ready.");
+      } catch (e) {
+        print("Migration warning: $e");
+      }
+
+      try {
+        await migrationConn.execute(
+          'ALTER TABLE tm_contacts ADD COLUMN IF NOT EXISTS custom_username TEXT;',
+        );
+        print("✅ DB Check: custom_username column is ready.");
+      } catch (_) {}
+
+      try {
+        await migrationConn.execute(
+          'ALTER TABLE mp_videos ADD COLUMN IF NOT EXISTS made_for_kids BOOLEAN DEFAULT FALSE;',
+        );
+        await migrationConn.execute(
+          "ALTER TABLE mp_videos ADD COLUMN IF NOT EXISTS age_rating TEXT DEFAULT 'all';",
+        );
+        print("✅ DB Check: mp_videos audience columns are ready.");
+      } catch (_) {}
+
+      try {
+        await migrationConn.execute(
+          'ALTER TABLE mp_videos ADD COLUMN IF NOT EXISTS repost_id UUID;',
+        );
+        print("✅ DB Check: mp_videos.repost_id column is ready.");
+      } catch (_) {}
+
+      try {
+        await migrationConn.execute('''
+          CREATE TABLE IF NOT EXISTS mp_watcher_interest (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            video_id TEXT NOT NULL,
+            creator_uid TEXT,
+            watcher_uid TEXT NOT NULL,
+            interest TEXT NOT NULL CHECK (interest IN ('interested','not_interested')),
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+            UNIQUE(video_id, watcher_uid)
+          )
+        ''');
+        await migrationConn.execute(
+          'CREATE INDEX IF NOT EXISTS idx_mp_watcher_interest_watcher ON mp_watcher_interest(watcher_uid);',
+        );
+        print("✅ DB Check: mp_watcher_interest table is ready.");
+      } catch (_) {}
+
+      try {
+        await migrationConn.execute('''
+          CREATE TABLE IF NOT EXISTS mp_reports (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            by_user TEXT NOT NULL,
+            video_id TEXT NOT NULL,
+            type TEXT NOT NULL,
+            description TEXT,
+            image_url TEXT,
+            status TEXT DEFAULT 'new',
+            synced_to_admin BOOLEAN DEFAULT FALSE,
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+            updated_at TIMESTAMPTZ DEFAULT NOW()
+          )
+        ''');
+        print("✅ DB Check: mp_reports table is ready.");
+      } catch (_) {}
+    } catch (e) {
+      print("⚠️ Schema migration connection failed (will retry next launch): $e");
+    } finally {
+      await migrationConn?.close();
+    }
+  }
+
   Future<void> connect() async {
     if (_connection != null && _connection!.isOpen) return;
 
@@ -52,104 +210,10 @@ class PostgresService {
       _isConnected = true;
       print("✅ Database Connected!");
 
-      try {
-        await _connection!.execute(
-          'ALTER TABLE mp_channels ADD COLUMN IF NOT EXISTS tunnel_url TEXT;',
-        );
-        await _connection!.execute(
-          'ALTER TABLE mp_channels ADD COLUMN IF NOT EXISTS owner_uid UUID;',
-        );
-        print("✅ DB Check: mp_channels profile routing columns are ready.");
-      } catch (_) {}
-
-      // 🚀 THE MAGIC FIX: This runs as the superuser, so it will NEVER throw a permission error!
-      try {
-        await _connection!.execute(
-          'ALTER TABLE mp_commented_videos ADD COLUMN IF NOT EXISTS viewer_name TEXT DEFAULT \'Creator\';',
-        );
-        await _connection!.execute(
-          'ALTER TABLE mp_commented_videos ADD COLUMN IF NOT EXISTS parent_comment_id TEXT;',
-        );
-        print("✅ DB Check: mp_commented_videos migration columns are ready.");
-      } catch (e) {
-        print("Migration warning: $e");
-      }
-
-
-
-      // 🚀 THE MIGRATION FIX: Check and add the column every time we connect!
-      try {
-        await _connection!.execute(
-          'ALTER TABLE tm_contacts ADD COLUMN IF NOT EXISTS custom_username TEXT;',
-        );
-        print("✅ DB Check: custom_username column is ready.");
-      } catch (_) {}
-
-      // 🚀 AUDIENCE MIGRATION: ensure the audience columns exist on existing installs.
-      try {
-        await _connection!.execute(
-          'ALTER TABLE mp_videos ADD COLUMN IF NOT EXISTS made_for_kids BOOLEAN DEFAULT FALSE;',
-        );
-        await _connection!.execute(
-          "ALTER TABLE mp_videos ADD COLUMN IF NOT EXISTS age_rating TEXT DEFAULT 'all';",
-        );
-        print("✅ DB Check: mp_videos audience columns are ready.");
-      } catch (_) {}
-
-      // 🚀 REPOST ATTRIBUTION MIGRATION: add repost_id so a local mp_videos row
-      // can point to the original video it re-shared (self-reference). Existing
-      // installs get the column via self-healing; new installs include it in
-      // setupDefaultDatabase. Kept nullable because non-reposted videos have
-      // no parent. Mirrors the admin-side mp_videos.repost_id column.
-      try {
-        await _connection!.execute(
-          'ALTER TABLE mp_videos ADD COLUMN IF NOT EXISTS repost_id UUID;',
-        );
-        print("✅ DB Check: mp_videos.repost_id column is ready.");
-      } catch (_) {}
-
-      // 🚀 WATCHER INTEREST TABLE SELF-HEALING: stores per-watcher
-      // interested / not_interested feedback for the recommendation engine.
-      // UNIQUE(video_id, watcher_uid) lets a watcher change their mind via
-      // upsert. Drives the "Not Interested" feedback loop.
-      try {
-        await _connection!.execute('''
-          CREATE TABLE IF NOT EXISTS mp_watcher_interest (
-            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-            video_id TEXT NOT NULL,
-            creator_uid TEXT,
-            watcher_uid TEXT NOT NULL,
-            interest TEXT NOT NULL CHECK (interest IN ('interested','not_interested')),
-            created_at TIMESTAMPTZ DEFAULT NOW(),
-            UNIQUE(video_id, watcher_uid)
-          )
-        ''');
-        await _connection!.execute(
-          'CREATE INDEX IF NOT EXISTS idx_mp_watcher_interest_watcher ON mp_watcher_interest(watcher_uid);',
-        );
-        print("✅ DB Check: mp_watcher_interest table is ready.");
-      } catch (_) {}
-
-      // 🚀 REPORTS TABLE SELF-HEALING:
-      // Local copy of reports filed by this user, mirrored to admin Supabase
-      // mp_reports. Lets the user see "My Reports" and retry failed uploads.
-      try {
-        await _connection!.execute('''
-          CREATE TABLE IF NOT EXISTS mp_reports (
-            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-            by_user TEXT NOT NULL,
-            video_id TEXT NOT NULL,
-            type TEXT NOT NULL,
-            description TEXT,
-            image_url TEXT,
-            status TEXT DEFAULT 'new',
-            synced_to_admin BOOLEAN DEFAULT FALSE,
-            created_at TIMESTAMPTZ DEFAULT NOW(),
-            updated_at TIMESTAMPTZ DEFAULT NOW()
-          )
-        ''');
-        print("✅ DB Check: mp_reports table is ready.");
-      } catch (_) {}
+      // 🚀 All schema migrations now run through the shared, always-superuser
+      // _runSchemaMigrations() — see that method for why this consolidation
+      // was necessary.
+      await _runSchemaMigrations();
     } catch (e) {
       print("❌ Database Connection Failed: $e");
     }
@@ -166,6 +230,14 @@ class PostgresService {
     required String userPassword,
   }) async {
     try {
+      // 🚀 FIX: run schema migrations FIRST, using a proper superuser
+      // connection, before establishing the normal per-user session below.
+      // Previously, returning users only ever ran the per-user CREATE TABLE
+      // blocks further down — any ALTER TABLE or new-table migration added
+      // after a user's initial registration would never take effect for
+      // them, since the per-user role can't ALTER tables it doesn't own.
+      await _runSchemaMigrations();
+
       final safeUser = email.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '_');
       _connection = await Connection.open(
         Endpoint(
@@ -1151,7 +1223,10 @@ class PostgresService {
         reaction_agree INTEGER DEFAULT 0,
         reaction_disagree INTEGER DEFAULT 0,
         routed_to_trustme BOOLEAN DEFAULT FALSE,
-        is_incognito BOOLEAN DEFAULT FALSE
+        is_incognito BOOLEAN DEFAULT FALSE,
+        is_deleted BOOLEAN DEFAULT FALSE,
+        is_edited BOOLEAN DEFAULT FALSE,
+        edited_at TIMESTAMPTZ
       )
     ''');
 

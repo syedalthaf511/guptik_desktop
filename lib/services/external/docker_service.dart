@@ -1564,6 +1564,8 @@ void main() async {
     }
   });
 
+
+   
 // 3. POST COMMENT ROUTE (Updated to support threaded replies & usernames)
   router.post('/player/video/comment', (Request req) async {
     try {
@@ -1575,12 +1577,15 @@ void main() async {
       );
       
       // 🚀 1. Save comment/reply text along with parent ID and viewer name
+      // 🚀 FIX: was silently dropping is_incognito even though the table has
+      // that column and player_comment_service.dart always sends it — every
+      // comment was stored as non-incognito regardless of the viewer's choice.
       await connection.execute(
         Sql.named("""
           INSERT INTO mp_commented_videos 
-            (video_id, creator_uid, comment_text, parent_comment_id, viewer_name) 
+            (video_id, creator_uid, comment_text, parent_comment_id, viewer_name, is_incognito) 
           VALUES 
-            (@vid, @uid, @txt, @parent, @name)
+            (@vid, @uid, @txt, @parent, @name, @incognito)
         """),
         parameters: {
           'vid': data['video_id'], 
@@ -1588,6 +1593,7 @@ void main() async {
           'txt': data['comment_text'],
           'parent': data['parent_comment_id'], // Supports User A replying to User B
           'name': data['viewer_name'] ?? 'Creator', // Prevents "Anonymous" fallback
+          'incognito': data['is_incognito'] ?? false, // 🚀 ADDED
         }
       );
 
@@ -1612,15 +1618,27 @@ void main() async {
         settings: const ConnectionSettings(sslMode: SslMode.disable),
       );
 
-      // 🚀 1. Fetch ALL comments for this video (Both parents and replies)
+      // 🚀 NOTE: schema (reaction_agree reuse, is_deleted/is_edited/edited_at
+      // columns, mp_comment_reactions table) is now created centrally in
+      // postgres_service.dart's connection-time migration, not inline here.
+
+      final viewerUid = req.headers['x-viewer-uid'] ?? '';
+
+      // 🚀 1. Fetch ALL comments for this video (Both parents and replies),
+      // now including reaction counts, edit/delete state, and this specific
+      // viewer's own reaction (via LEFT JOIN on mp_comment_reactions).
       final result = await connection.execute(
         Sql.named("""
-          SELECT id, comment_text, creator_uid, comment_timestamp, parent_comment_id, viewer_name 
-          FROM mp_commented_videos 
-          WHERE video_id = @vid
-          ORDER BY comment_timestamp DESC
+          SELECT c.id, c.comment_text, c.creator_uid, c.comment_timestamp, c.parent_comment_id, c.viewer_name,
+                 c.likes_on_comment_local, c.reaction_heart, c.reaction_agree, c.reaction_laugh, c.reaction_disagree,
+                 c.is_deleted, c.is_edited, c.edited_at, c.is_incognito,
+                 r.reaction_type AS viewer_reaction
+          FROM mp_commented_videos c
+          LEFT JOIN mp_comment_reactions r ON r.comment_id = c.id::text AND r.reactor_uid = @viewer
+          WHERE c.video_id = @vid
+          ORDER BY c.comment_timestamp DESC
         """),
-        parameters: {'vid': videoId},
+        parameters: {'vid': videoId, 'viewer': viewerUid},
       );
       
       await connection.close();
@@ -1634,6 +1652,16 @@ void main() async {
           'created_at': row[3]?.toString() ?? '',
           'parent_comment_id': row[4]?.toString(),
           'creator_name': row[5]?.toString() ?? 'Creator',
+          'likes_count': row[6] ?? 0, // 🚀 ADDED
+          'heart_count': row[7] ?? 0, // 🚀 ADDED
+          'clap_count': row[8] ?? 0, // 🚀 ADDED
+          'laugh_count': row[9] ?? 0, // 🚀 ADDED
+          'disagree_count': row[10] ?? 0, // 🚀 ADDED
+          'is_deleted': row[11] ?? false, // 🚀 ADDED
+          'is_edited': row[12] ?? false, // 🚀 ADDED
+          'edited_at': row[13]?.toString(), // 🚀 ADDED
+          'is_incognito': row[14] ?? false, // 🚀 ADDED
+          'viewer_reaction': row[15]?.toString(), // 🚀 ADDED
           'replies': [], // 🚀 Initialize empty replies list for every comment
         });
       }
@@ -1683,14 +1711,20 @@ void main() async {
         settings: const ConnectionSettings(sslMode: SslMode.disable),
       );
 
+      final viewerUid = req.headers['x-viewer-uid'] ?? ''; // 🚀 ADDED
+
       final result = await connection.execute(
         Sql.named("""
-          SELECT id, comment_text, creator_uid, comment_timestamp, parent_comment_id, viewer_name 
-          FROM mp_commented_videos 
-          WHERE video_id = @vid AND parent_comment_id = @pid
-          ORDER BY comment_timestamp ASC
+          SELECT c.id, c.comment_text, c.creator_uid, c.comment_timestamp, c.parent_comment_id, c.viewer_name,
+                 c.likes_on_comment_local, c.reaction_heart, c.reaction_agree, c.reaction_laugh, c.reaction_disagree,
+                 c.is_deleted, c.is_edited, c.edited_at, c.is_incognito,
+                 r.reaction_type AS viewer_reaction
+          FROM mp_commented_videos c
+          LEFT JOIN mp_comment_reactions r ON r.comment_id = c.id::text AND r.reactor_uid = @viewer
+          WHERE c.video_id = @vid AND c.parent_comment_id = @pid
+          ORDER BY c.comment_timestamp ASC
         """),
-        parameters: {'vid': videoId, 'pid': parentId},
+        parameters: {'vid': videoId, 'pid': parentId, 'viewer': viewerUid},
       );
       
       await connection.close();
@@ -1704,6 +1738,16 @@ void main() async {
           'created_at': row[3]?.toString() ?? '',
           'parent_comment_id': row[4]?.toString(),
           'creator_name': row[5]?.toString() ?? 'Creator',
+          'likes_count': row[6] ?? 0, // 🚀 ADDED
+          'heart_count': row[7] ?? 0, // 🚀 ADDED
+          'clap_count': row[8] ?? 0, // 🚀 ADDED
+          'laugh_count': row[9] ?? 0, // 🚀 ADDED
+          'disagree_count': row[10] ?? 0, // 🚀 ADDED
+          'is_deleted': row[11] ?? false, // 🚀 ADDED
+          'is_edited': row[12] ?? false, // 🚀 ADDED
+          'edited_at': row[13]?.toString(), // 🚀 ADDED
+          'is_incognito': row[14] ?? false, // 🚀 ADDED
+          'viewer_reaction': row[15]?.toString(), // 🚀 ADDED
         });
       }
 
@@ -1713,6 +1757,256 @@ void main() async {
     }
   });
 
+  // 4c-i. 🚀 ADDED: EDIT COMMENT ROUTE — only the comment's own author can edit.
+  router.put('/player/video/comment/<commentId>', (Request req, String commentId) async {
+    try {
+      final data = jsonDecode(await req.readAsString());
+      final editorUid = data['editor_uid']?.toString() ?? '';
+      final newText = data['comment_text']?.toString() ?? '';
+      if (newText.isEmpty) {
+        return Response.badRequest(body: 'Missing comment_text');
+      }
+
+      final connection = await Connection.open(
+        Endpoint(host: 'db', port: 5432, database: 'postgres', username: 'postgres', password: 'GuptikSystemPassword2026'),
+        settings: const ConnectionSettings(sslMode: SslMode.disable),
+      );
+
+      final ownerCheck = await connection.execute(
+        Sql.named("SELECT creator_uid FROM mp_commented_videos WHERE id = @id::uuid"),
+        parameters: {'id': commentId},
+      );
+      if (ownerCheck.isEmpty || ownerCheck.first[0]?.toString() != editorUid) {
+        await connection.close();
+        return Response.forbidden(jsonEncode({'error': 'Not the comment author'}));
+      }
+
+      await connection.execute(
+        Sql.named("""
+          UPDATE mp_commented_videos
+          SET comment_text = @txt, is_edited = TRUE, edited_at = NOW()
+          WHERE id = @id::uuid
+        """),
+        parameters: {'id': commentId, 'txt': newText},
+      );
+      await connection.close();
+      return Response(200, body: jsonEncode({'status': 'comment_edited'}), headers: {'Content-Type': 'application/json'});
+    } catch (e) {
+      return Response(500, body: jsonEncode({'error': 'Failed to edit comment: $e'}));
+    }
+  });
+
+  // 4c-ii. 🚀 ADDED: DELETE COMMENT ROUTE (soft delete) — only the comment's
+  // own author can delete. Text is replaced rather than the row removed, so
+  // reply threads under it stay intact (same convention as major platforms).
+  router.delete('/player/video/comment/<commentId>', (Request req, String commentId) async {
+    try {
+      final data = jsonDecode(await req.readAsString());
+      final deleterUid = data['deleter_uid']?.toString() ?? '';
+
+      final connection = await Connection.open(
+        Endpoint(host: 'db', port: 5432, database: 'postgres', username: 'postgres', password: 'GuptikSystemPassword2026'),
+        settings: const ConnectionSettings(sslMode: SslMode.disable),
+      );
+
+      final ownerCheck = await connection.execute(
+        Sql.named("SELECT creator_uid FROM mp_commented_videos WHERE id = @id::uuid"),
+        parameters: {'id': commentId},
+      );
+      if (ownerCheck.isEmpty || ownerCheck.first[0]?.toString() != deleterUid) {
+        await connection.close();
+        return Response.forbidden(jsonEncode({'error': 'Not the comment author'}));
+      }
+
+      await connection.execute(
+        Sql.named("""
+          UPDATE mp_commented_videos
+          SET is_deleted = TRUE, comment_text = '[Comment deleted]'
+          WHERE id = @id::uuid
+        """),
+        parameters: {'id': commentId},
+      );
+      await connection.close();
+      return Response(200, body: jsonEncode({'status': 'comment_deleted'}), headers: {'Content-Type': 'application/json'});
+    } catch (e) {
+      return Response(500, body: jsonEncode({'error': 'Failed to delete comment: $e'}));
+    }
+  });
+
+  // 4c-iii. 🚀 ADDED: REACT TO COMMENT ROUTE — toggles a reaction on/off, or
+  // switches it, per (comment_id, reactor_uid) pair. Mirrors the shape
+  // player_comment_service.dart already expects: {'active': bool, 'reaction_type': string?}.
+  router.post('/player/video/comment/<commentId>/react', (Request req, String commentId) async {
+    try {
+      final data = jsonDecode(await req.readAsString());
+      final reactorUid = data['reactor_uid']?.toString() ?? '';
+      final reactionType = data['reaction_type']?.toString() ?? '';
+      if (reactorUid.isEmpty || reactionType.isEmpty) {
+        return Response.badRequest(body: 'Missing reactor_uid or reaction_type');
+      }
+
+      const Map<String, String> columnFor = {
+        'like': 'likes_on_comment_local',
+        'heart': 'reaction_heart',
+        'clap': 'reaction_agree', // 🚀 reuses the existing reaction_agree column instead of a new one
+        'laugh': 'reaction_laugh',
+        'disagree': 'reaction_disagree',
+      };
+      final column = columnFor[reactionType];
+      if (column == null) {
+        return Response.badRequest(body: 'Unknown reaction_type');
+      }
+
+      final connection = await Connection.open(
+        Endpoint(host: 'db', port: 5432, database: 'postgres', username: 'postgres', password: 'GuptikSystemPassword2026'),
+        settings: const ConnectionSettings(sslMode: SslMode.disable),
+      );
+
+      // 🚀 NOTE: schema is created centrally in postgres_service.dart now.
+
+      final existing = await connection.execute(
+        Sql.named("SELECT reaction_type FROM mp_comment_reactions WHERE comment_id = @cid AND reactor_uid = @ruid"),
+        parameters: {'cid': commentId, 'ruid': reactorUid},
+      );
+
+      String? activeReaction;
+
+      if (existing.isEmpty) {
+        // No prior reaction — add it
+        await connection.execute(
+          Sql.named("INSERT INTO mp_comment_reactions (comment_id, reactor_uid, reaction_type) VALUES (@cid, @ruid, @type)"),
+          parameters: {'cid': commentId, 'ruid': reactorUid, 'type': reactionType},
+        );
+        await connection.execute(
+          Sql.named("UPDATE mp_commented_videos SET $column = $column + 1 WHERE id = @id::uuid"),
+          parameters: {'id': commentId},
+        );
+        activeReaction = reactionType;
+      } else {
+        final currentType = existing.first[0]?.toString();
+        if (currentType == reactionType) {
+          // Same reaction tapped again — remove it (toggle off)
+          await connection.execute(
+            Sql.named("DELETE FROM mp_comment_reactions WHERE comment_id = @cid AND reactor_uid = @ruid"),
+            parameters: {'cid': commentId, 'ruid': reactorUid},
+          );
+          await connection.execute(
+            Sql.named("UPDATE mp_commented_videos SET $column = GREATEST($column - 1, 0) WHERE id = @id::uuid"),
+            parameters: {'id': commentId},
+          );
+          activeReaction = null;
+        } else {
+          // Switching from one reaction type to another
+          final oldColumn = columnFor[currentType] ?? column;
+          await connection.execute(
+            Sql.named("UPDATE mp_comment_reactions SET reaction_type = @type WHERE comment_id = @cid AND reactor_uid = @ruid"),
+            parameters: {'cid': commentId, 'ruid': reactorUid, 'type': reactionType},
+          );
+          await connection.execute(
+            Sql.named("UPDATE mp_commented_videos SET $oldColumn = GREATEST($oldColumn - 1, 0) WHERE id = @id::uuid"),
+            parameters: {'id': commentId},
+          );
+          await connection.execute(
+            Sql.named("UPDATE mp_commented_videos SET $column = $column + 1 WHERE id = @id::uuid"),
+            parameters: {'id': commentId},
+          );
+          activeReaction = reactionType;
+        }
+      }
+
+      await connection.close();
+      return Response(
+        200,
+        body: jsonEncode({'active': activeReaction != null, 'reaction_type': activeReaction}),
+        headers: {'Content-Type': 'application/json'},
+      );
+    } catch (e) {
+      return Response(500, body: jsonEncode({'error': 'Failed to react to comment: $e'}));
+    }
+  });
+
+  // 4c-iv. 🚀 ADDED: REPORT COMMENT ROUTE — logs a report for later review.
+  router.post('/player/video/comment/<commentId>/report', (Request req, String commentId) async {
+    try {
+      final data = jsonDecode(await req.readAsString());
+      final reporterUid = data['reporter_uid']?.toString() ?? '';
+      final reason = data['reason']?.toString() ?? 'Other';
+
+      final connection = await Connection.open(
+        Endpoint(host: 'db', port: 5432, database: 'postgres', username: 'postgres', password: 'GuptikSystemPassword2026'),
+        settings: const ConnectionSettings(sslMode: SslMode.disable),
+      );
+
+      // 🚀 NOTE: mp_comment_reports schema is created centrally in postgres_service.dart now.
+
+      await connection.execute(
+        Sql.named("INSERT INTO mp_comment_reports (comment_id, reporter_uid, reason) VALUES (@cid, @ruid, @reason)"),
+        parameters: {'cid': commentId, 'ruid': reporterUid, 'reason': reason},
+      );
+      await connection.close();
+      return Response(200, body: jsonEncode({'status': 'reported'}), headers: {'Content-Type': 'application/json'});
+    } catch (e) {
+      return Response(500, body: jsonEncode({'error': 'Failed to report comment: $e'}));
+    }
+  });
+
+  // 4c. GET STICKERS ROUTE — returns the shoppable product stickers attached to
+  // a video so ANY viewer (not just the creator) can see them. Reads from the
+  // creator's local mp_sticker_products_catalog and returns the image as the
+  // stored public URL (already uploaded to shared storage by the editor).
+  router.get('/player/video/stickers/<videoId>', (Request req, String videoId) async {
+    try {
+      final connection = await Connection.open(
+        Endpoint(host: 'db', port: 5432, database: 'postgres', username: 'postgres', password: 'GuptikSystemPassword2026'),
+        settings: const ConnectionSettings(sslMode: SslMode.disable),
+      );
+
+      // Ensure the shoppable columns exist before selecting them.
+      await connection.execute("""
+        ALTER TABLE mp_sticker_products_catalog
+          ADD COLUMN IF NOT EXISTS mrp DECIMAL DEFAULT 0,
+          ADD COLUMN IF NOT EXISTS duration_on_screen DECIMAL DEFAULT 8
+      """);
+
+      final result = await connection.execute(
+        Sql.named("""
+          SELECT id, product_id, timestamp_in_video, duration_on_screen,
+                 clickable_zone, product_name, price, mrp, currency,
+                 description, link_url, image_path, is_active
+          FROM mp_sticker_products_catalog
+          WHERE video_id::text = @vid AND is_active = TRUE
+          ORDER BY timestamp_in_video ASC
+        """),
+        parameters: {'vid': videoId},
+      );
+      await connection.close();
+
+      final List<Map<String, dynamic>> stickers = [];
+      for (final row in result) {
+        stickers.add({
+          'id': row[0]?.toString() ?? '',
+          'product_id': row[1]?.toString() ?? '',
+          'timestamp_in_video': (row[2] is num) ? (row[2] as num).toDouble() : double.tryParse(row[2]?.toString() ?? '0') ?? 0.0,
+          'duration_on_screen': (row[3] is num) ? (row[3] as num).toDouble() : double.tryParse(row[3]?.toString() ?? '8') ?? 8.0,
+          'clickable_zone': row[4],
+          'product_name': row[5]?.toString() ?? 'Untitled',
+          'price': (row[6] is num) ? (row[6] as num).toDouble() : double.tryParse(row[6]?.toString() ?? '0') ?? 0.0,
+          'mrp': (row[7] is num) ? (row[7] as num).toDouble() : double.tryParse(row[7]?.toString() ?? '0') ?? 0.0,
+          'currency': row[8]?.toString() ?? 'USD',
+          'description': row[9]?.toString() ?? '',
+          'link_url': row[10]?.toString(),
+          'image_path': row[11]?.toString(),
+          'is_active': row[12] ?? true,
+        });
+      }
+
+      return Response(200, body: jsonEncode(stickers), headers: {'Content-Type': 'application/json'});
+    } catch (e) {
+      return Response(500, body: jsonEncode({'error': 'Failed to fetch stickers: $e'}));
+    }
+  });
+
+ 
   // 4c. GET STICKERS ROUTE — returns the shoppable product stickers attached to
   // a video so ANY viewer (not just the creator) can see them. Reads from the
   // creator's local mp_sticker_products_catalog and returns the image as the
