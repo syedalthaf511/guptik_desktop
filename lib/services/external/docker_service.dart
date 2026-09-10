@@ -1565,7 +1565,7 @@ void main() async {
   });
 
 
-   
+ 
 // 3. POST COMMENT ROUTE (Updated to support threaded replies & usernames)
   router.post('/player/video/comment', (Request req) async {
     try {
@@ -1685,15 +1685,30 @@ void main() async {
         }
       }
 
-      // 🚀 3. Attach the replies directly into the JSON of their parent comment!
-      for (var parent in topLevelComments) {
-        final pid = parent['comment_id'];
-        if (replyMap.containsKey(pid)) {
-          final replies = replyMap[pid]!;
-          // Sort replies so the oldest reply shows up first in the thread (like YouTube)
+      // 🚀 FIX (Bug B): recursively attach replies at ANY depth, not just one
+      // level. The previous version only attached direct replies onto
+      // top-level comments — a reply-to-a-reply ("grandchild" comment, e.g.
+      // "re" replying to "so" replying to "he") was never itself given its
+      // own nested replies list, so on a fresh top-level fetch (e.g. after
+      // closing and reopening the comment sheet) it silently lost its
+      // "View replies" link even though the data still existed in the DB —
+      // it only "worked" during the same session because tapping "View
+      // replies" on it separately calls the dedicated per-comment
+      // /replies/<parentId> endpoint, bypassing this bug entirely.
+      void attachRepliesRecursively(Map<String, dynamic> comment) {
+        final cid = comment['comment_id'];
+        if (replyMap.containsKey(cid)) {
+          final replies = replyMap[cid]!;
           replies.sort((a, b) => (a['created_at'] as String).compareTo(b['created_at'] as String));
-          parent['replies'] = replies;
+          comment['replies'] = replies;
+          for (final reply in replies) {
+            attachRepliesRecursively(reply); // recurse into this reply's own replies
+          }
         }
+      }
+
+      for (var parent in topLevelComments) {
+        attachRepliesRecursively(parent);
       }
 
       // Return the clean, nested tree back to Flutter!
@@ -1950,63 +1965,6 @@ void main() async {
     }
   });
 
-  // 4c. GET STICKERS ROUTE — returns the shoppable product stickers attached to
-  // a video so ANY viewer (not just the creator) can see them. Reads from the
-  // creator's local mp_sticker_products_catalog and returns the image as the
-  // stored public URL (already uploaded to shared storage by the editor).
-  router.get('/player/video/stickers/<videoId>', (Request req, String videoId) async {
-    try {
-      final connection = await Connection.open(
-        Endpoint(host: 'db', port: 5432, database: 'postgres', username: 'postgres', password: 'GuptikSystemPassword2026'),
-        settings: const ConnectionSettings(sslMode: SslMode.disable),
-      );
-
-      // Ensure the shoppable columns exist before selecting them.
-      await connection.execute("""
-        ALTER TABLE mp_sticker_products_catalog
-          ADD COLUMN IF NOT EXISTS mrp DECIMAL DEFAULT 0,
-          ADD COLUMN IF NOT EXISTS duration_on_screen DECIMAL DEFAULT 8
-      """);
-
-      final result = await connection.execute(
-        Sql.named("""
-          SELECT id, product_id, timestamp_in_video, duration_on_screen,
-                 clickable_zone, product_name, price, mrp, currency,
-                 description, link_url, image_path, is_active
-          FROM mp_sticker_products_catalog
-          WHERE video_id::text = @vid AND is_active = TRUE
-          ORDER BY timestamp_in_video ASC
-        """),
-        parameters: {'vid': videoId},
-      );
-      await connection.close();
-
-      final List<Map<String, dynamic>> stickers = [];
-      for (final row in result) {
-        stickers.add({
-          'id': row[0]?.toString() ?? '',
-          'product_id': row[1]?.toString() ?? '',
-          'timestamp_in_video': (row[2] is num) ? (row[2] as num).toDouble() : double.tryParse(row[2]?.toString() ?? '0') ?? 0.0,
-          'duration_on_screen': (row[3] is num) ? (row[3] as num).toDouble() : double.tryParse(row[3]?.toString() ?? '8') ?? 8.0,
-          'clickable_zone': row[4],
-          'product_name': row[5]?.toString() ?? 'Untitled',
-          'price': (row[6] is num) ? (row[6] as num).toDouble() : double.tryParse(row[6]?.toString() ?? '0') ?? 0.0,
-          'mrp': (row[7] is num) ? (row[7] as num).toDouble() : double.tryParse(row[7]?.toString() ?? '0') ?? 0.0,
-          'currency': row[8]?.toString() ?? 'USD',
-          'description': row[9]?.toString() ?? '',
-          'link_url': row[10]?.toString(),
-          'image_path': row[11]?.toString(),
-          'is_active': row[12] ?? true,
-        });
-      }
-
-      return Response(200, body: jsonEncode(stickers), headers: {'Content-Type': 'application/json'});
-    } catch (e) {
-      return Response(500, body: jsonEncode({'error': 'Failed to fetch stickers: $e'}));
-    }
-  });
-
- 
   // 4c. GET STICKERS ROUTE — returns the shoppable product stickers attached to
   // a video so ANY viewer (not just the creator) can see them. Reads from the
   // creator's local mp_sticker_products_catalog and returns the image as the
@@ -2411,9 +2369,21 @@ void main() async {
       
       // 🚀 FIXED: Uses id::text instead of CAST to prevent crashes on corrupted data
       final result = await connection.execute(
-        Sql.named("SELECT like_count_local, comment_count_local, save_count_local, view_count_local, repost_count_local FROM mp_videos WHERE id::text = @vid LIMIT 1"),
+        Sql.named("SELECT like_count_local, save_count_local, view_count_local, repost_count_local FROM mp_videos WHERE id::text = @vid LIMIT 1"),
         parameters: {'vid': videoId}
       );
+
+      // 🚀 FIX: comment_count_local was a manually-maintained counter,
+      // incremented on every post but never decremented on delete — it drifted
+      // badly from reality (e.g. showed "15" when only 5 real comments/replies
+      // existed, partly from testing while this endpoint was being built).
+      // A live COUNT(*) against the real table can never drift, since it's
+      // computed fresh every time instead of accumulated over time.
+      final commentCountResult = await connection.execute(
+        Sql.named("SELECT COUNT(*) FROM mp_commented_videos WHERE video_id = @vid AND (is_deleted IS NULL OR is_deleted = FALSE)"),
+        parameters: {'vid': videoId}
+      );
+      final liveCommentCount = commentCountResult.isNotEmpty ? (commentCountResult.first[0] as int? ?? 0) : 0;
       
       await connection.close();
       
@@ -2421,15 +2391,16 @@ void main() async {
       
       return Response(200, body: jsonEncode({
         'likes': result.first[0] ?? 0,
-        'comments': result.first[1] ?? 0,
-        'saves': result.first[2] ?? 0,
-        'views': result.first[3] ?? 0,
-        'reposts': result.first[4] ?? 0 
+        'comments': liveCommentCount, // 🚀 FIX: now a live, always-accurate count
+        'saves': result.first[1] ?? 0,
+        'views': result.first[2] ?? 0,
+        'reposts': result.first[3] ?? 0 
       }), headers: {'Content-Type': 'application/json'});
     } catch (e) {
       return Response(500, body: 'Stats Error: $e');
     }
   });
+
   
   // =========================================================================
   // 🚀 9. CREATOR CHANNEL PROFILE & VIDEOS

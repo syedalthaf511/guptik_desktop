@@ -243,7 +243,12 @@ class _DesktopMediaPlayerScreenState extends State<DesktopMediaPlayerScreen> wit
 
   Future<void> _syncRealTimeStats() async {
     final stats = await _apiService.fetchVideoStats(widget.video.videoId);
-    final liveComments = await _apiService.fetchComments(widget.video.videoId);
+    // 🚀 FIX: was calling _apiService.fetchComments(...), which returns raw
+    // List<dynamic> — the WRONG service for this. PlayerCommentService (the
+    // same one _showCommentDialog already uses) returns properly-typed
+    // List<PlayerComment>, which _countAllComments below actually needs.
+    final commentService = PlayerCommentService(gatewayUrl: _apiService.gatewayUrl);
+    final liveComments = await commentService.fetchComments(widget.video.videoId);
     
     if (mounted) {
       setState(() {
@@ -252,9 +257,25 @@ class _DesktopMediaPlayerScreenState extends State<DesktopMediaPlayerScreen> wit
         _currentViews = stats['views'] ?? _currentViews;
         _repostCount = stats['reposts'] ?? _repostCount;
       }
-        _currentComments = liveComments.length; 
+        // 🚀 FIX: was liveComments.length, which only counts TOP-LEVEL
+        // comments — a reply-to-a-reply ("so" under "he", "re" under "so")
+        // was never counted, so this showed "(3)" when 5 comments/replies
+        // actually existed. Now recursively counts every nested reply too,
+        // matching the same fix applied on mobile.
+        _currentComments = _countAllComments(liveComments);
       });
     }
+  }
+
+  // 🚀 ADDED: recursively counts a comment plus all of its nested replies
+  // at any depth, so the displayed count always matches what's actually
+  // shown in the comment thread.
+  int _countAllComments(List<PlayerComment> comments) {
+    int total = 0;
+    for (final c in comments) {
+      total += 1 + _countAllComments(c.replies);
+    }
+    return total;
   }
 
   @override
