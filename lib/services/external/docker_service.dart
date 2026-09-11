@@ -54,7 +54,6 @@ class DockerService {
 
     final requiredDirs = [
       '$_vaultPath/data/postgres',
-      '$_vaultPath/data/n8n',
       '$_vaultPath/data/osint',
       '$_vaultPath/vault_files',
       '$_vaultPath/gateway',
@@ -74,8 +73,6 @@ POSTGRES_PORT=55432
 CF_TUNNEL_TOKEN=$tunnelToken
 PUBLIC_URL=$publicUrl
 VAULT_PATH=$_vaultPath
-N8N_USER=$email
-N8N_PASS=Gupt1k_pa55
 ''');
 
     await _generateGatewayFiles(publicUrl);
@@ -118,20 +115,6 @@ services:
       - ./data/postgres:/var/lib/postgresql/data
 
  
-
-  n8n:
-    image: docker.n8n.io/n8nio/n8n
-    restart: always
-    ports:
-      - "56887:5678"
-    environment:
-      - N8N_BASIC_AUTH_ACTIVE=true
-      - N8N_BASIC_AUTH_USER=\${N8N_USER}
-      - N8N_BASIC_AUTH_PASSWORD=\${N8N_PASS}
-      - N8N_OWNER_FIRST_NAME=Guptik
-      - N8N_OWNER_LAST_NAME=Admin
-    volumes:
-      - ./data/n8n:/home/node/.n8n
 
   osint_python:
     image: python:3.11-slim
@@ -390,6 +373,30 @@ void main() async {
           LEFT JOIN mp_channels c ON v.channel_id = c.channel_id
           WHERE s.is_active = TRUE
           ORDER BY s.created_at DESC
+          """
+        );
+      } else if (type == 'repost') {
+        // 🚀 FIX: This branch was missing entirely, so mobile's "Repost
+        // Videos" folder always returned an empty list ([]). Reposts are
+        // rows in mp_repost_videos on THIS node keyed by the reposter's uid;
+        // join back to mp_videos on original_video_id so we can return a
+        // playable video id/title/path, matching the other branches' shape.
+        result = await connection.execute(
+          """
+          SELECT v.id::text, v.title, v.file_path
+          FROM mp_repost_videos r
+          JOIN mp_videos v ON v.id::text = r.original_video_id
+          ORDER BY r.reposted_at DESC
+          """
+        );
+      } else if (type == 'drafts') {
+        // 🚀 FIX: Also missing — mobile's "Drafts" folder had no backing
+        // branch either, so it always came back empty too.
+        result = await connection.execute(
+          """
+          SELECT id::text, COALESCE(title, 'Untitled Draft'), COALESCE(file_path_temp, '')
+          FROM mp_draft_videos
+          ORDER BY last_edited_at DESC
           """
         );
       }
