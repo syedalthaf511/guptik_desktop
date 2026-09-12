@@ -2392,6 +2392,17 @@ void main() async {
       );
       final liveCommentCount = commentCountResult.isNotEmpty ? (commentCountResult.first[0] as int? ?? 0) : 0;
       
+      // 🚀 FIX: Same pattern as comments — repost_count_local is also a
+      // manually-maintained counter, incremented on every repost but never
+      // decremented on delete. A live COUNT(*) against the real mp_repost_videos
+      // table can never drift, since it's computed fresh every time instead of
+      // accumulated over time.
+      final repostCountResult = await connection.execute(
+        Sql.named("SELECT COUNT(*) FROM mp_repost_videos WHERE original_video_id = @vid"),
+        parameters: {'vid': videoId}
+      );
+      final liveRepostCount = repostCountResult.isNotEmpty ? (repostCountResult.first[0] as int? ?? 0) : 0;
+      
       await connection.close();
       
       if (result.isEmpty) return Response(404, body: 'Video not found');
@@ -2401,7 +2412,7 @@ void main() async {
         'comments': liveCommentCount, // 🚀 FIX: now a live, always-accurate count
         'saves': result.first[1] ?? 0,
         'views': result.first[2] ?? 0,
-        'reposts': result.first[3] ?? 0 
+        'reposts': liveRepostCount, // 🚀 FIX: now a live, always-accurate count 
       }), headers: {'Content-Type': 'application/json'});
     } catch (e) {
       return Response(500, body: 'Stats Error: $e');
